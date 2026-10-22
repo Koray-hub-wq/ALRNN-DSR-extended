@@ -146,7 +146,8 @@ PY
 
   printf '\n[%s, GPU %s] Creating bifurcation comparison\n' "$regime" "$gpu_id"
   cd "$BIFURCATION_DIR"
-  "$python_bin" compare_model_bifurcation_diagrams.py \
+  "$python_bin" "$SCRIPT_DIR/compare_model_bifurcation_diagrams.py" \
+    --backend-script "$BIFURCATION_DIR/compare_model_bifurcation_diagrams.py" \
     --model-type alrnn \
     --regime "$regime" \
     --model-runs \

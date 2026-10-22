@@ -29,7 +29,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.special import expit
 import torch
-from torch import nn
+from alrnn_model import SavedALRNN, load_saved_model
 
 
 CACHE_VERSION = 1
@@ -291,56 +291,14 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-class SavedALRNN(nn.Module):
-    """Inference-only form of the tutorial recurrence, initialized from saved weights."""
-
-    def __init__(self, state, pwl_units):
-        super().__init__()
-        required = {"A", "W", "h", "B"}
-        if set(state) not in (required, required | {"C"}):
-            raise ValueError(f"Unexpected single AL-RNN state_dict keys: {sorted(state)}")
-        self.M = state["A"].numel()
-        self.N = state["B"].shape[0]
-        self.P = int(pwl_units)
-        self.phi_dim = state["C"].shape[1] if "C" in state else 0
-        if not 0 <= self.P <= self.M or self.N > self.M:
-            raise ValueError("Invalid latent/nonlinear/observation dimensions.")
-        shapes = {"A": (self.M,), "W": (self.M, self.M), "h": (self.M,), "B": (self.N, self.M)}
-        if "C" in state:
-            shapes["C"] = (self.M, self.phi_dim)
-        for key, shape in shapes.items():
-            if tuple(state[key].shape) != shape or not torch.isfinite(state[key]).all():
-                raise ValueError(f"Invalid or non-finite saved tensor {key}.")
-            self.register_buffer(key, state[key])
-        if "C" not in state:
-            self.register_buffer("C", None)
-
-    def forward(self, z, phi=None):
-        activated = z.clone()
-        if self.P:
-            activated[:, -self.P:] = torch.relu(activated[:, -self.P:])
-        result = self.A * z + activated @ self.W.t() + self.h
-        if self.C is not None:
-            result = result + phi @ self.C.t()
-        return result
-
-
 def load_model(run_dir, device):
-    with (run_dir / "metrics.json").open(encoding="utf-8-sig") as stream:
-        metrics = json.load(stream)
+    model, metrics, model_path = load_saved_model(run_dir, device)
     saved_args = metrics.get("args", {})
-    pwl_units = saved_args.get("pwl_units", metrics.get("pwl_units"))
-    if pwl_units is None:
-        raise ValueError(f"Cannot infer pwl_units from {run_dir / 'metrics.json'}")
-    model_path = run_dir / "model.pt"
-    state = torch.load(model_path, map_location=device, weights_only=True)
-    model = SavedALRNN(state, pwl_units).eval()
     if model.N != 3 or model.phi_dim not in (0, 1):
         raise ValueError("This evaluation supports three observations and zero or one external parameter.")
-    if saved_args.get("latent_dim", model.M) != model.M or metrics.get("phi_dim", model.phi_dim) != model.phi_dim:
-        raise ValueError(f"Checkpoint dimensions disagree with metadata in {run_dir}")
     return model, dict(run_dir=str(run_dir.resolve()), model_sha256=file_hash(model_path),
                        latent_dim=model.M, pwl_units=model.P, phi_dim=model.phi_dim,
+                       phi_terms=list(model.phi_terms),
                        training_phi_values=saved_args.get("train_phi_values"))
 
 
@@ -591,7 +549,7 @@ def main(argv=None):
     plot_models = []
     for index, (run_dir, label) in enumerate(zip(args.model_runs, labels), start=1):
         model, info = load_model(run_dir, device)
-        print(f"[{index}/{len(labels)}] {label}: M={model.M}, P={model.P}, phi_dim={model.phi_dim}", flush=True)
+        print(f"[{index}/{len(labels)}] {label}: M={model.M}, P={model.P}, phi_dim={model.phi_dim}, phi_terms={model.phi_terms}", flush=True)
         prediction, failed_at = rollout(model, arrays["x"][0], arrays["phi"], device)
         filename = f"{model_file_stem(index, label)}.npz"
         np.savez_compressed(args.output_dir / filename, prediction=prediction,

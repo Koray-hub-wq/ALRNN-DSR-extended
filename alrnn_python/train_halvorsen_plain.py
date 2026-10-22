@@ -1,12 +1,13 @@
 import argparse
 import copy
 import json
-import math
 import os
 from pathlib import Path
 
+from parameter_terms import PARAMETER_TERMS, resolve_phi_terms
 
-def parse_args():
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Train the AL-RNN tutorial model on one fixed Halvorsen trajectory."
     )
@@ -24,7 +25,14 @@ def parse_args():
     parser.add_argument(
         "--use-phi",
         action="store_true",
-        help="Load trajectory_phi.npy and feed phi through the C phi_t term.",
+        help="Legacy shorthand for --phi-terms additive. Explicit --phi-terms takes precedence.",
+    )
+    parser.add_argument(
+        "--phi-terms",
+        nargs="+",
+        choices=("none", *PARAMETER_TERMS),
+        default=None,
+        help="Optional contributions: additive (C phi), diagonal ((D_phi phi) * z), diagonal-relu ((D_relu_phi phi) * relu_P(z)), shifted-relu (V_phi relu_P(z + Q_phi phi)), or none. Select any combination.",
     )
     parser.add_argument(
         "--no-balanced-phi",
@@ -71,7 +79,13 @@ def parse_args():
         action="store_true",
         help="Disable CUDA even if it is available.",
     )
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        args.phi_terms = list(resolve_phi_terms(args.phi_terms, args.use_phi))
+    except ValueError as error:
+        parser.error(str(error))
+    args.use_phi = bool(args.phi_terms)
+    return args
 
 
 def json_ready(value):
@@ -100,9 +114,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from tqdm import trange
 
+from alrnn_model import AL_RNN
 from metrics import power_spectrum_error, state_space_divergence_binning
 
 
@@ -267,50 +281,6 @@ class MultiTrajectoryDataset:
         return x, s
 
 
-class AL_RNN(nn.Module):
-    def __init__(self, M, P, N, phi_dim=0):
-        super(AL_RNN, self).__init__()
-        self.M = M
-        self.P = P
-        self.N = N
-        self.phi_dim = phi_dim
-        self.A, self.W, self.h = self.initialize_AWh_random()
-        self.B = self.init_uniform((self.N, self.M))
-        if self.phi_dim > 0:
-            self.C = nn.Parameter(torch.zeros(self.M, self.phi_dim))
-        else:
-            self.register_parameter("C", None)
-
-    def forward(self, z, phi_t=None):
-        z_unactivated = torch.clone(z)
-        if self.P > 0:
-            z[:, -self.P :] = F.relu(z[:, -self.P :])
-        out = self.A * z_unactivated + z @ self.W.t() + self.h
-        if self.C is not None:
-            if phi_t is None:
-                raise ValueError("phi_t must be provided when phi_dim > 0")
-            out = out + phi_t @ self.C.t()
-        return out
-
-    def initialize_AWh_random(self):
-        A = nn.Parameter(torch.diagonal(self.normalized_positive_definite(self.M), 0))
-        W = nn.Parameter(torch.randn(self.M, self.M) * 0.01)
-        h = nn.Parameter(torch.zeros(self.M))
-        return A, W, h
-
-    def normalized_positive_definite(self, M):
-        R = np.random.randn(M, M).astype(np.float32)
-        K = np.matmul(R.T, R) / M + np.eye(M)
-        lambda_max = np.max(np.abs(np.linalg.eigvals(K)))
-        return torch.tensor(K / lambda_max).float()
-
-    def init_uniform(self, shape):
-        tensor = torch.empty(*shape)
-        r = 1 / math.sqrt(shape[0])
-        torch.nn.init.uniform_(tensor, -r, r)
-        return nn.Parameter(tensor, requires_grad=True)
-
-
 @torch.no_grad()
 def predict_free_sequence(model, x, T, phi=None):
     b, N = x.size()
@@ -426,6 +396,7 @@ def main():
         device = torch.device("cpu")
     print("Using device:", device)
     print("CPU threads:", args.cpu_threads)
+    print("Active phi terms:", args.phi_terms or "none")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -498,13 +469,13 @@ def main():
         print("Single-trajectory mode")
         print("X_train:", X_train.shape, "X_test:", X_test.shape)
 
-    model = AL_RNN(M=args.latent_dim, P=args.pwl_units, N=N, phi_dim=phi_dim).to(
+    model = AL_RNN(M=args.latent_dim, P=args.pwl_units, N=N, phi_dim=phi_dim, phi_terms=args.phi_terms).to(
         device
     )
     model_path = output_dir / "model.pt"
     if args.eval_only:
         print("Eval-only mode: loading model from", model_path)
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
         metrics = {"losses": [], "dstsp": [], "dh": []}
     else:
         optimizer = torch.optim.RAdam(model.parameters(), lr=args.start_lr)
@@ -638,6 +609,12 @@ def main():
                     "T_test": int(T_test),
                     "N": int(N),
                     "phi_dim": int(phi_dim),
+                    "model_config": model.model_config(),
+                    "parameter_counts": {
+                        "total": sum(parameter.numel() for parameter in model.parameters()),
+                        "trainable": sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad),
+                        "by_tensor": {name: parameter.numel() for name, parameter in model.named_parameters()},
+                    },
                     "primary_dstsp": primary_result["dstsp"],
                     "primary_dh": primary_result["dh"],
                     "evaluation": eval_results,

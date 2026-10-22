@@ -75,6 +75,13 @@ The ALRNN is trained by backpropagation through time using sparse teacher forcin
 # 2. Python Implementation
 A basic implementation of the model and training routine is also available in Python (see [ALRNN_python](alrnn_python/) folder). 
 
+The extended Python training script supports independently selectable additive
+`C phi`, raw diagonal `(D_phi phi) * z` and ReLU diagonal
+`(D_relu_phi phi) * relu_P(z)`, plus a shifted activation branch
+`V_phi @ relu_P(z + Q_phi @ phi)`, via `--phi-terms`. See
+[Optional Parameter Terms](alrnn_python/EXTERNAL_TERMS.md) for training flags,
+checkpoint compatibility, evaluation and the term registry.
+
 ## Model and Training routine
 The model including its training algorithm is implemented in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The AL-RNN using Identity mapping to generate observations is defined within the model class `AL_RNN`. The latent dimension $M$ and number of PWL units $P$ need to be specified. Training is performed through the `training_sh` routine using backpropagation through time with a sparse teacher forcing protocol, forcing the latent states based on the observations in order to prevent exploding/vanishing gradients.
 

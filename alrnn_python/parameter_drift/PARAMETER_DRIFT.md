@@ -56,6 +56,12 @@ also accepted as controls and ignore phi. No context encoder or teacher forcing
 is used. The observed initial state initializes `z = x0 @ B`, with its first
 three dimensions overwritten by `x0`, exactly as in the tutorial.
 
+The shared loader also supports raw-state and ReLU-state diagonal coupling,
+individually or combined with additive C phi.
+The `shifted-relu` branch V_phi @ relu_P(z + Q_phi @ phi) is supported as well.
+The active terms are read from the checkpoint and validated against saved model
+metadata. See [Optional Parameter Terms](../EXTERNAL_TERMS.md).
+
 ## Ground Truth And Indexing
 
 - The default is 4,000 **true-system** burn-in integration steps at the fixed

@@ -131,7 +131,8 @@ done
 
 printf '\nComparing Rossler bifurcation diagrams for a in [0.05, 0.35]\n' | tee -a "$LOG_FILE"
 cd "$BIFURCATION_DIR"
-"$python_bin" compare_model_bifurcation_diagrams.py \
+"$python_bin" "$SCRIPT_DIR/compare_model_bifurcation_diagrams.py" \
+  --backend-script "$BIFURCATION_DIR/compare_model_bifurcation_diagrams.py" \
   --model-type alrnn \
   --regime "$regime" \
   --model-runs "$RUN_ALL" "$RUN_NEGATIVE" "$RUN_POSITIVE" \
