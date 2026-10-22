@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="${ROOT_DIR:-$HOME}"
+BTIP_REPO="$ROOT_DIR/DynaMix-python-b-tipping"
+source "$BTIP_REPO/venv/bin/activate"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
