@@ -11,7 +11,8 @@ cd "$SCRIPT_DIR"
 DATA_DIR="${DATA_DIR:-/export/home/klenkeit/training_data/single_halvorsen_constparams/14to209_noisy_9params_trajectories}"
 BIFURCATION_DIR="${BIFURCATION_DIR:-${ROOT_DIR:-$HOME}/diffrentbutconst_prams}"
 python_bin="${PYTHON_BIN:-python}"
-gpu_id=0
+# Usage: bash run_halvorsen_9params_phi_ablation.sh [GPU_ID]
+gpu_id="${1:-${GPU_ID:-0}}"
 latents_dim=200
 epochs=1000
 pwl_units=20
