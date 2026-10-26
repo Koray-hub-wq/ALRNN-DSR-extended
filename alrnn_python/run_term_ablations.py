@@ -34,9 +34,9 @@ class Step:
     cwd: Path
 
 
-def validate_gpu_ids(values, device_count=None):
-    if not isinstance(values, list) or not 1 <= len(values) <= 4:
-        raise ValueError("GPU IDs must be a JSON list of one to four integers.")
+def validate_gpu_ids(values, device_count=None, *, max_gpus=4):
+    if not isinstance(values, list) or not 1 <= len(values) <= max_gpus:
+        raise ValueError(f"GPU IDs must be a JSON list of one to {max_gpus} integers.")
     if any(type(value) is not int or value < 0 for value in values):
         raise ValueError("GPU IDs must be nonnegative integers.")
     if len(values) != len(set(values)):
@@ -83,14 +83,16 @@ def load_groups(data_dir, regime):
     return groups
 
 
-def build_steps(args, script_dir, groups, run_root, plot_root, variant, gpu_id):
+def build_steps(args, script_dir, groups, run_root, plot_root, variant, gpu_id, terms=None, variant_subdir=True):
+    terms = VARIANTS[variant] if terms is None else terms
     steps = []
-    run_dirs = [run_root / variant / subset for subset in groups]
+    model_root = run_root / variant if variant_subdir else run_root
+    run_dirs = [model_root / subset for subset in groups]
     for (subset, phi_values), output_dir in zip(groups.items(), run_dirs):
         command = [
             sys.executable, "-u", str(script_dir / "train_halvorsen_plain.py"),
             "--data-dir", str(args.data_dir), "--multi-trajectory",
-            "--phi-terms", *VARIANTS[variant],
+            "--phi-terms", *terms,
             "--gpu-id", str(gpu_id), "--cpu-threads", str(args.cpu_threads),
             "--latent-dim", str(args.latent_dim), "--pwl-units", str(args.pwl_units),
             "--batch-size", str(args.batch_size), "--epochs", str(args.epochs),
@@ -105,7 +107,7 @@ def build_steps(args, script_dir, groups, run_root, plot_root, variant, gpu_id):
     else:
         labels = ["all 8 values", "negative except phi=-0.142857", "positive plus phi=-0.142857"]
     lower, upper = PARAMETER_RANGES[args.regime]
-    output_dir = plot_root / variant
+    output_dir = plot_root / variant if variant_subdir else plot_root
     command = [
         sys.executable, "-u", str(script_dir / "compare_model_bifurcation_diagrams.py"),
         "--backend-script", str(args.backend_script),
@@ -152,8 +154,8 @@ def stop_processes(active):
         job["log"].close()
 
 
-def schedule(gpu_file, gpu_ids, device_count, log_dir, make_steps, env, poll_interval=2):
-    pending = deque(VARIANTS)
+def schedule(gpu_file, gpu_ids, device_count, log_dir, make_steps, env, poll_interval=2, job_names=None, max_gpus=4):
+    pending = deque(VARIANTS if job_names is None else job_names)
     active = {}
     results = {}
     last_warning = None
@@ -180,7 +182,7 @@ def schedule(gpu_file, gpu_ids, device_count, log_dir, make_steps, env, poll_int
         while pending or active:
             try:
                 with gpu_file.open(encoding="utf-8-sig") as stream:
-                    updated = validate_gpu_ids(json.load(stream), device_count)
+                    updated = validate_gpu_ids(json.load(stream), device_count, max_gpus=max_gpus)
                 if updated != gpu_ids:
                     gpu_ids = updated
                     print(f"GPU queue updated: {gpu_ids}", flush=True)

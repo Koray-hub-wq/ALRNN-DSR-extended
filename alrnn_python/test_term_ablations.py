@@ -189,6 +189,19 @@ class TermAblationTests(unittest.TestCase):
         starts = [e for e in self.events() if e["event"] == "start" and e["step"] == 0]
         self.assertEqual(starts[1]["gpu"], 1)
 
+    def test_custom_six_job_queue_keeps_default_variants_unchanged(self):
+        jobs = [f"training_{index}" for index in range(6)]
+        gpu_file = self.root / "gpu_ids.json"
+        gpu_file.write_text("[0, 1]")
+        with contextlib.redirect_stdout(io.StringIO()):
+            results = runner.schedule(
+                gpu_file, [0, 1], 4, self.root,
+                lambda name, gpu: self.fake_steps(name, gpu, duration=0.01)[:1],
+                os.environ.copy(), poll_interval=0.01, job_names=jobs,
+            )
+        self.assertEqual(results, dict.fromkeys(jobs, 0))
+        self.assertEqual(list(runner.VARIANTS), ["diagonal", "diagonal_relu", "shifted_relu", "additive_diagonal"])
+
     def test_failed_pipeline_does_not_stop_other_variants(self):
         with contextlib.redirect_stdout(io.StringIO()):
             results = self.run_schedule([0, 1], lambda v, g: self.fake_steps(v, g, failure=(v == "diagonal")))

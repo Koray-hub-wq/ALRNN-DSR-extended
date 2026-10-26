@@ -104,3 +104,57 @@ DRY_RUN=1 bash run_dadras_cphi_without_phi1.sh 0 1
 DRY_RUN=1 bash run_rossler_cphi_shifted_split.sh 0 1
 python -m unittest test_term_ablations -v
 ```
+
+## Combined additive + shifted-ReLU experiment
+
+```bash
+bash run_dadras_rossler_cphi_shifted_relu.sh 0 1 2 3 4 5
+```
+
+This additional script trains only `--phi-terms additive shifted-relu`: the
+standard AL-RNN plus `C @ phi` and `V_phi @ relu_P(z + Q_phi @ phi)`. Neither
+diagonal coupling term is enabled. The four-variant scripts above are unchanged.
+
+It creates six independent training jobs: Dadras and Rossler, each on all,
+negative, and positive values. The existing Dadras exclusion of phi=+1 and
+Rossler's shifted 3/5 split are retained. M=200, P=20, 750 epochs, batch size 80,
+100 batches per epoch, and four CPU threads per active training are the defaults.
+The same venv activation and path environment overrides are used.
+
+One to six GPU IDs can be supplied. Each GPU runs one training at a time and
+takes the next pending job when it finishes. The first two jobs are Dadras all
+and Rossler all. Unlike the four-variant experiment, different subsets of the
+same system can train concurrently. After all six trainings finish, two
+bifurcation jobs compare each system's three models with ground truth. A
+system's comparison is skipped if one of its trainings failed; the other
+system can still complete. Existing bifurcation ranges and 320 parameter
+values are retained.
+
+With six GPUs all six trainings can run simultaneously (24 CPU threads in
+total at the default four threads per training). The older four-variant
+scripts keep their four-GPU limit.
+
+```text
+runs/term_ablations/<regime>/cphi_shifted_relu/<timestamp>_m200_p20/
+  {all,negative,positive}/
+bifurcation_diagrams/term_ablations/<regime>/cphi_shifted_relu/<timestamp>_m200_p20/
+  bifurcation_compare.png
+  bifurcation_cache.npz
+runs/term_ablations/_queues/cphi_shifted_relu/<timestamp>_m200_p20/
+  plan.json
+  gpu_ids.json
+  summary.json
+  logs/{dadras,rossler}_{all,negative,positive,bifurcation}.log
+```
+
+Progress commands and per-system output paths are printed at startup. Shared
+logs, plan, summary and the live GPU list are in `_queues`, because one queue
+controls both systems. The live list accepts up to six GPU IDs, including
+updates while jobs are pending. Existing output folders are not moved.
+Do not share GPUs with another running experiment unless this is intentional.
+A dry run prints all eight commands without requiring CUDA:
+
+```bash
+DRY_RUN=1 bash run_dadras_rossler_cphi_shifted_relu.sh 0 1
+python -m unittest test_term_ablations test_cphi_shifted_regimes -v
+```
