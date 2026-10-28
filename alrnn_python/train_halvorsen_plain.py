@@ -9,7 +9,7 @@ from parameter_terms import PARAMETER_TERMS, resolve_phi_terms
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Train the AL-RNN tutorial model on one fixed Halvorsen trajectory."
+        description="Train a Single AL-RNN on one or multiple fixed or time-varying trajectories."
     )
     parser.add_argument(
         "--data-dir",
@@ -47,7 +47,10 @@ def parse_args(argv=None):
         help="Restrict multi-trajectory training to these phi constants, e.g. --train-phi-values -1 -0.75 -0.5. Evaluation still covers all phi values.",
     )
     parser.add_argument("--trajectory-id", type=int, default=0)
-    parser.add_argument("--split-idx", type=int, default=80000)
+    parser.add_argument(
+        "--split-idx", type=int, default=80000,
+        help="Train/test split for legacy fixed-length data. Mixed datasets use their saved train lengths.",
+    )
     parser.add_argument("--latent-dim", "-M", type=int, default=20)
     parser.add_argument("--pwl-units", "-P", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -118,6 +121,7 @@ from tqdm import trange
 
 from alrnn_model import AL_RNN
 from metrics import power_spectrum_error, state_space_divergence_binning
+from mixed_trajectory_dataset import MixedTrajectoryDataset
 
 
 class SingleTrajectoryDataset:
@@ -402,6 +406,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data_dir = Path(args.data_dir)
+    mixed_data = (data_dir / "trajectory_lengths.npy").exists()
+    if mixed_data and not args.multi_trajectory:
+        raise ValueError("Mixed datasets require --multi-trajectory to respect all saved trajectory lengths")
     trajectories = np.load(data_dir / "trajectories.npy").astype(np.float32)
     all_phi = (
         np.load(data_dir / "trajectory_phi.npy").astype(np.float32)
@@ -415,7 +422,29 @@ def main():
         else None
     )
 
-    if args.multi_trajectory:
+    if mixed_data:
+        if args.train_phi_values is not None:
+            raise ValueError("--train-phi-values selects constant trajectories and is not supported for mixed datasets")
+        dataset = MixedTrajectoryDataset(
+            trajectories,
+            lengths=np.load(data_dir / "trajectory_lengths.npy"),
+            train_lengths=np.load(data_dir / "trajectory_train_lengths.npy"),
+            external_inputs=all_phi,
+            group_names=np.load(data_dir / "trajectory_group_names.npy"),
+            sequence_length=args.sequence_length,
+            batch_size=args.batch_size,
+        )
+        if args.t_transient < 0 or np.any(dataset.test_lengths <= args.t_transient + 1):
+            raise ValueError("Every test tail needs at least t_transient + 2 samples; reduce --t-transient or increase n_steps")
+        T_train = int(dataset.train_lengths.max())
+        T_test = int(dataset.test_lengths.max())
+        N = trajectories.shape[-1]
+        phi_dim = 0 if all_phi is None else all_phi.shape[-1]
+        print("Mixed multi-trajectory mode: uniform sampling per original trajectory")
+        print("Training lengths:", dataset.train_lengths.tolist())
+        print("Test lengths:", dataset.test_lengths.tolist())
+        print("Evaluation groups:", dataset.eval_group_names)
+    elif args.multi_trajectory:
         X_train_shape = trajectories[:, : args.split_idx, :].shape
         X_test_shape = trajectories[:, args.split_idx :, :].shape
         phi_dim = 0 if all_phi is None else all_phi.shape[-1]
@@ -569,7 +598,21 @@ def main():
         }
 
     eval_results = []
-    if args.multi_trajectory:
+    if mixed_data:
+        for group_index, group in enumerate(dataset.eval_group_names):
+            trajectory_index = int(dataset.eval_indices_by_group[group][0])
+            x_test_eval, phi_test_eval = dataset.test_trajectory(
+                trajectory_index, length=args.t_gen + args.t_transient
+            )
+            eval_results.append(
+                evaluate_test_trajectory(
+                    x_test_eval,
+                    phi_test_eval,
+                    label=f"{group}, traj={trajectory_index}",
+                    file_stem=f"mixed_group_{group_index}_traj_{trajectory_index}",
+                )
+            )
+    elif args.multi_trajectory:
         for phi_value in dataset.eval_unique_phi:
             trajectory_index = int(dataset.eval_indices_by_phi[phi_value][0])
             x_test_eval, phi_test_eval = dataset.test_trajectory(
@@ -607,6 +650,11 @@ def main():
                     "args": vars(args),
                     "T_train": int(T_train),
                     "T_test": int(T_test),
+                    **({
+                        "trajectory_train_lengths": dataset.train_lengths.tolist(),
+                        "trajectory_test_lengths": dataset.test_lengths.tolist(),
+                        "sampling": "uniform_per_trajectory",
+                    } if mixed_data else {}),
                     "N": int(N),
                     "phi_dim": int(phi_dim),
                     "model_config": model.model_config(),
