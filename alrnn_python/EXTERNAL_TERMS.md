@@ -133,10 +133,31 @@ python compare_model_bifurcation_diagrams.py \
   --output bifurcation_diagrams/rossler_additive_diagonal.png
 ```
 
-The external script's simulation, caching and plotting are reused; only its
-AL-RNN loader is supplied by this repository. No changes to the data-generation
-repository are required. Calling that external script directly still uses its
-old model implementation and does not support the coupling checkpoints.
+The external script's simulation, caching and plot layouts are reused. This
+repository supplies its AL-RNN loader and the training-parameter annotations.
+No changes to the data-generation repository are required. Calling that external
+script directly still uses its old model implementation and does not support
+the coupling checkpoints or these extended annotations.
+
+For each ALRNN model, the adapter reads the actual training portions of
+`trajectory_phi_raw.npy` (or `trajectory_phi.npy` as a fallback):
+
+- Constant trajectories only: keep the existing blue lines at the selected
+  training parameter values, including constant-only datasets in the new format.
+- Any time-varying training trajectory, including a mix with constant ones:
+  shade one pale blue band from the minimum to the maximum training parameter,
+  with no additional constant-value lines for that model.
+
+Saved `trajectory_train_lengths.npy` takes precedence over `--split-idx` from
+the training run. Test tails and NaN padding are excluded. Model-side constant
+parameter filters and single-trajectory selection are respected. Bounds are
+shown in the plot's raw parameter units; normalized phi arrays are converted
+using the dataset's saved reference. The ground-truth panel has no training band.
+
+Annotations are also refreshed with `--plot-only`, so existing bifurcation
+caches can be redrawn without retraining or recomputing the sweep. If datasets
+have moved, pass `--training-data-dirs /new/path/to/dataset` (one directory per
+model run). `--no-training-markers` disables both the lines and the bands.
 
 ## Adding A Term Later
 

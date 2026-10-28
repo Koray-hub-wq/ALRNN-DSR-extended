@@ -1,7 +1,8 @@
 """Run the existing bifurcation analysis with this repository's AL-RNN loader.
 
 All analysis options are passed through to the existing script. The backend can
-be selected with --backend-script; its ODE simulation and plotting stay intact.
+be selected with --backend-script. Constant training parameters retain their
+vertical lines; time-varying training parameters get a pale blue range.
 """
 
 import argparse
@@ -10,6 +11,7 @@ from pathlib import Path
 import sys
 
 from alrnn_model import load_saved_model
+from bifurcation_training_markers import install_training_markers
 
 
 def find_backend(explicit=None):
@@ -34,6 +36,7 @@ def main(argv=None):
     sys.modules[spec.name] = backend
     spec.loader.exec_module(backend)
     backend.load_alrnn_model = load_saved_model
+    install_training_markers(backend)
     original_argv = sys.argv
     try:
         sys.argv = [str(path), *remaining]
