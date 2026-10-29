@@ -63,6 +63,68 @@ class ALRNNModelTests(unittest.TestCase):
                 self.assertAlmostEqual(model.weight.item(), expected, places=6)
                 self.assertEqual(metrics["dstsp"], [1.0, 2.0])
                 self.assertEqual(dstsp.call_count, 2)
+                self.assertEqual(metrics["metric_steps"], [2, 2])
+                self.assertEqual(metrics["metric_epochs"], [1, 2])
+
+    def test_short_test_sections_are_skipped_and_actual_metric_lengths_are_saved(self):
+        main = self.training["main"]
+        for mode, transient in (("mixed", 12), ("mixed", 100), ("mixed", 0),
+                                ("single", 100), ("multi", 100)):
+            with self.subTest(mode=mode, transient=transient), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                data_dir = root / "data"
+                output = root / "output"
+                data_dir.mkdir()
+                data = np.random.default_rng(17).normal(size=(3, 48, 3)).astype(np.float32)
+                np.save(data_dir / "trajectories.npy", data)
+                if mode == "mixed":
+                    np.save(data_dir / "trajectory_lengths.npy", np.array([40, 44, 48]))
+                    np.save(data_dir / "trajectory_train_lengths.npy", np.array([30, 30, 30]))
+                    np.save(data_dir / "trajectory_group_names.npy", np.array(["a", "b", "c"]))
+                flags = ["--data-dir", str(data_dir), "--output-dir", str(output),
+                         "--force-cpu", "--latent-dim", "6", "--pwl-units", "2",
+                         "--split-idx", "30", "--sequence-length", "4",
+                         "--t-gen", "5", "--t-transient", str(transient)]
+                if mode != "single":
+                    flags.append("--multi-trajectory")
+                parsed = self.training["parse_args"](flags)
+                dstsp = Mock(return_value=1.25)
+                replacements = {
+                    "args": parsed,
+                    "train_sh": Mock(return_value={"losses": [], "dstsp": [], "dh": []}),
+                    "state_space_divergence_binning": dstsp,
+                    "power_spectrum_error": Mock(return_value=0.25),
+                }
+                with patch.dict(main.__globals__, replacements), \
+                     patch.object(torch, "set_num_interop_threads"):
+                    main()
+                self.assertTrue((output / "model.pt").is_file())
+                saved = json.loads((output / "metrics.json").read_text())
+                results = saved["evaluation"]
+                expected_steps = [0, 2, 5] if transient == 12 else ([5, 5, 5] if transient == 0 else [0] * len(results))
+                self.assertEqual([result["metric_steps"] for result in results], expected_steps)
+                self.assertEqual(dstsp.call_count, sum(count > 0 for count in expected_steps))
+                if mode == "mixed":
+                    self.assertEqual([result["test_steps_available"] for result in results], [10, 14, 18])
+                for result, count in zip(results, expected_steps):
+                    plot = output / f'{result["file_stem"]}_free_rollout_3d.png'
+                    self.assertEqual(plot.exists(), count > 0)
+                    if count:
+                        self.assertEqual(result["status"], "completed")
+                        self.assertEqual(result["metric_stop_step_exclusive"], transient + count)
+                    else:
+                        self.assertEqual(result["status"], "skipped")
+                        self.assertEqual(result["skip_reason"], "insufficient_test_samples_after_transient")
+                        self.assertIsNone(result["dstsp"])
+                        self.assertIsNone(result["dh"])
+                self.assertEqual(saved["primary_metric_steps"], expected_steps[0])
+                if not expected_steps[0]:
+                    self.assertIsNone(saved["primary_dstsp"])
+
+    def test_parser_rejects_negative_transient_and_too_short_requested_horizon(self):
+        for flags in (["--t-transient", "-1"], ["--t-gen", "1"]):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit):
+                self.training["parse_args"](flags)
 
     def test_all_sixteen_configurations_match_explicit_equation(self):
         z = torch.tensor([[1., -2., 3., -4., -5., 6.], [-2., 3., -1., 2., 4., -6.]])

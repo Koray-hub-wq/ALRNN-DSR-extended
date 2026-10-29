@@ -89,6 +89,10 @@ def parse_args(argv=None):
         help="Disable CUDA even if it is available.",
     )
     args = parser.parse_args(argv)
+    if args.t_transient < 0:
+        parser.error("--t-transient must be nonnegative")
+    if args.t_gen < 2:
+        parser.error("--t-gen must be at least 2")
     try:
         args.phi_terms = list(resolve_phi_terms(args.phi_terms, args.use_phi))
     except ValueError as error:
@@ -350,6 +354,8 @@ def train_sh(
     losses = []
     klx = []
     dh = []
+    metric_steps = []
+    metric_epochs = []
     last_dstsp = float("nan")
 
     with trange(num_epochs, desc="Training Progress") as epochs:
@@ -375,6 +381,8 @@ def train_sh(
             if e % ssi == 0:
                 with torch.no_grad():
                     x_ref, s_ref = dataset.eval_reference(length=10000)
+                    metric_steps.append(int(x_ref.shape[0]))
+                    metric_epochs.append(e + 1)
                     s_test = s_ref.unsqueeze(1).to(device) if s_ref is not None else None
                     x0_test = x_ref[0:1, :].to(device)
                     z_test = predict_free_sequence(
@@ -390,7 +398,11 @@ def train_sh(
 
     if use_best_model:
         model.load_state_dict(best_model.state_dict())
-    return {"losses": losses, "dstsp": klx, "dh": dh}
+    return {
+        "losses": losses, "dstsp": klx, "dh": dh,
+        "metric_steps": metric_steps, "metric_epochs": metric_epochs,
+        "reference": {"source": "first_selected_training_trajectory_prefix", "t_transient": 0},
+    }
 
 
 def main():
@@ -442,8 +454,6 @@ def main():
             sequence_length=args.sequence_length,
             batch_size=args.batch_size,
         )
-        if args.t_transient < 0 or np.any(dataset.test_lengths <= args.t_transient + 1):
-            raise ValueError("Every test tail needs at least t_transient + 2 samples; reduce --t-transient or increase n_steps")
         T_train = int(dataset.train_lengths.max())
         T_test = int(dataset.test_lengths.max())
         N = trajectories.shape[-1]
@@ -539,7 +549,30 @@ def main():
         torch.save(model.state_dict(), model_path)
 
     def evaluate_test_trajectory(x_test_tensor, phi_test_tensor, label, file_stem):
-        horizon = min(args.t_gen, x_test_tensor.shape[0] - args.t_transient)
+        available_steps = int(x_test_tensor.shape[0])
+        horizon = max(0, min(args.t_gen, available_steps - args.t_transient))
+        result = {
+            "label": label,
+            "file_stem": file_stem,
+            "status": "completed" if horizon >= 2 else "skipped",
+            "skip_reason": None,
+            "test_steps_available": available_steps,
+            "requested_metric_steps": args.t_gen,
+            "t_transient": args.t_transient,
+            "metric_steps": horizon if horizon >= 2 else 0,
+            "metric_start_step": args.t_transient if horizon >= 2 else None,
+            "metric_stop_step_exclusive": args.t_transient + horizon if horizon >= 2 else None,
+            "dstsp": None, "dh": None,
+            "orbit_finite": None, "orbit_min": None, "orbit_max": None,
+        }
+        if horizon < 2:
+            result["skip_reason"] = "insufficient_test_samples_after_transient"
+            print(
+                f"WARNING: {label} | test evaluation skipped: {available_steps} test samples, "
+                f"t_transient={args.t_transient}; at least 2 samples must remain. "
+                "No test metrics, rollout arrays, or test plot generated."
+            )
+            return result
         total_steps = horizon + args.t_transient
         x_test_torch = x_test_tensor[:total_steps].to(device).unsqueeze(0)
         phi_test_torch = (
@@ -565,7 +598,7 @@ def main():
         dh = power_spectrum_error(torch.tensor(orbit[:, 0 : model.N]), x_truth)
         orbit_finite = bool(np.isfinite(orbit).all())
         print(
-            f"{label} | Dstsp={dstsp:.6f} | DH={dh:.6f} | "
+            f"{label} | steps={horizon} | Dstsp={dstsp:.6f} | DH={dh:.6f} | "
             f"finite={orbit_finite} | min={float(np.nanmin(orbit)):.6f} | "
             f"max={float(np.nanmax(orbit)):.6f}"
         )
@@ -596,22 +629,21 @@ def main():
         plt.close()
         np.save(output_dir / f"{file_stem}_orbit.npy", orbit)
         np.save(output_dir / f"{file_stem}_x_test.npy", x_truth_np)
-        return {
-            "label": label,
-            "file_stem": file_stem,
+        result.update({
             "dstsp": float(dstsp),
             "dh": float(dh),
             "orbit_finite": orbit_finite,
             "orbit_min": float(np.nanmin(orbit)),
             "orbit_max": float(np.nanmax(orbit)),
-        }
+        })
+        return result
 
     eval_results = []
     if mixed_data:
         for group_index, group in enumerate(dataset.eval_group_names):
             trajectory_index = int(dataset.eval_indices_by_group[group][0])
             x_test_eval, phi_test_eval = dataset.test_trajectory(
-                trajectory_index, length=args.t_gen + args.t_transient
+                trajectory_index
             )
             eval_results.append(
                 evaluate_test_trajectory(
@@ -625,7 +657,7 @@ def main():
         for phi_value in dataset.eval_unique_phi:
             trajectory_index = int(dataset.eval_indices_by_phi[phi_value][0])
             x_test_eval, phi_test_eval = dataset.test_trajectory(
-                trajectory_index, length=args.t_gen + args.t_transient
+                trajectory_index
             )
             safe_phi = str(float(phi_value)).replace("-", "m").replace(".", "p")
             eval_results.append(
@@ -674,6 +706,8 @@ def main():
                     },
                     "primary_dstsp": primary_result["dstsp"],
                     "primary_dh": primary_result["dh"],
+                    "primary_metric_steps": primary_result["metric_steps"],
+                    "primary_evaluation_status": primary_result["status"],
                     "evaluation": eval_results,
                     "training": metrics,
                 }
@@ -693,15 +727,16 @@ def main():
         plt.savefig(output_dir / "training_loss.png", dpi=180)
         plt.close()
 
-    if len(eval_results) > 1:
-        labels = [result["label"] for result in eval_results]
-        x_pos = np.arange(len(eval_results))
-        fig, axes = plt.subplots(1, 2, figsize=(max(8, len(eval_results) * 1.4), 4))
-        axes[0].bar(x_pos, [result["dstsp"] for result in eval_results])
+    completed_results = [result for result in eval_results if result["status"] == "completed"]
+    if len(completed_results) > 1:
+        labels = [result["label"] for result in completed_results]
+        x_pos = np.arange(len(completed_results))
+        fig, axes = plt.subplots(1, 2, figsize=(max(8, len(completed_results) * 1.4), 4))
+        axes[0].bar(x_pos, [result["dstsp"] for result in completed_results])
         axes[0].set_title("Dstsp")
         axes[0].set_xticks(x_pos)
         axes[0].set_xticklabels(labels, rotation=45, ha="right")
-        axes[1].bar(x_pos, [result["dh"] for result in eval_results])
+        axes[1].bar(x_pos, [result["dh"] for result in completed_results])
         axes[1].set_title("DH")
         axes[1].set_xticks(x_pos)
         axes[1].set_xticklabels(labels, rotation=45, ha="right")
