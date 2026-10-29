@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Usage: bash run_halvorsen_mixed_groups_cphi.sh GPU_ID [GPU_ID ...] (1-4 GPUs)
+# Optional: DATASET_GROUPS="combined_halvorsen halvorsen_no_burnin_veryshort"
 ROOT_DIR="${ROOT_DIR:-$HOME}"
 BTIP_REPO="$ROOT_DIR/DynaMix-python-b-tipping"
 source "$BTIP_REPO/venv/bin/activate"
@@ -27,6 +28,26 @@ for gpu in "${GPU_IDS[@]}"; do
 done
 
 GROUPS_TO_TRAIN=(combined_halvorsen halvorsen_no_burnin_short halvorsen_no_burnin_veryshort timevarying_halvorsen)
+if [[ -v DATASET_GROUPS ]]; then
+  read -r -a GROUPS_TO_TRAIN <<< "$DATASET_GROUPS"
+  if (( ${#GROUPS_TO_TRAIN[@]} == 0 )); then
+    printf 'DATASET_GROUPS must contain at least one group name.\n' >&2
+    exit 2
+  fi
+  declare -A selected_groups=()
+  for group in "${GROUPS_TO_TRAIN[@]}"; do
+    case "$group" in
+      combined_halvorsen|halvorsen_no_burnin_short|halvorsen_no_burnin_veryshort|timevarying_halvorsen) ;;
+      *) printf 'Unknown dataset group: %s\n' "$group" >&2; exit 2 ;;
+    esac
+    if [[ -n "${selected_groups[$group]:-}" ]]; then
+      printf 'Duplicate dataset group: %s\n' "$group" >&2
+      exit 2
+    fi
+    selected_groups[$group]=1
+  done
+fi
+printf 'Selected groups: %s\n' "${GROUPS_TO_TRAIN[*]}"
 DATASETS=(halvorsen_phi_m1_to_1 halvorsen_phi_m1_to_m0p5 halvorsen_phi_m0p25_to_0p75)
 latents_dim=200
 pwl_units=20
@@ -98,7 +119,13 @@ train_group() {
   local group="$1" gpu="$2" dataset index
   local run_root="$SCRIPT_DIR/runs/term_ablations/halvorsen/${group}_cphi/$run_id"
   local output_dir="$SCRIPT_DIR/bifurcation_diagrams/term_ablations/halvorsen/${group}_cphi/$run_id"
-  local -a data_dirs=() run_dirs=()
+  local -a data_dirs=() run_dirs=() selection_args=()
+  case "$group" in
+    combined_halvorsen|halvorsen_no_burnin_veryshort)
+      selection_args=(--no-best-model)
+      printf '[%s] Model selection disabled: saving final training state.\n' "$group"
+      ;;
+  esac
   [[ "$dry_run" == 1 ]] || mkdir -p "$run_root/logs"
   printf '[%s] GPU %s | models: %s\n' "$group" "$gpu" "$run_root"
   for dataset in "${DATASETS[@]}"; do
@@ -113,6 +140,7 @@ train_group() {
       --gpu-id "$gpu" --cpu-threads "$cpu_threads" \
       --latent-dim "$latents_dim" --pwl-units "$pwl_units" \
       --epochs "$epochs" --batch-size "$batch_size" --batches-per-epoch "$batches_per_epoch" \
+      "${selection_args[@]}" \
       --output-dir "${run_dirs[$index]}" || return $?
   done
   printf '[%s] GPU %s | bifurcation comparison\n' "$group" "$gpu"
@@ -170,6 +198,7 @@ for pid in "${PIDS[@]}"; do wait "$pid" || failed=1; done
 if (( failed )); then
   printf 'At least one group failed. Worker logs: %s\n' "$LOG_ROOT" >&2
 else
-  printf 'All four groups finished (12 models and four bifurcation comparisons).\n'
+  printf 'All %s selected groups finished (%s models and %s bifurcation comparisons).\n' \
+    "${#GROUPS_TO_TRAIN[@]}" "$(( ${#GROUPS_TO_TRAIN[@]} * 3 ))" "${#GROUPS_TO_TRAIN[@]}"
 fi
 exit "$failed"
