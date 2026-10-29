@@ -5,7 +5,7 @@ import runpy
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import torch
@@ -27,6 +27,42 @@ class ALRNNModelTests(unittest.TestCase):
         np.random.seed(13)
         torch.manual_seed(13)
         return AL_RNN(6, 2, 3, phi_dim=phi_dim, phi_terms=terms)
+
+    def test_model_selection_parser_defaults_and_override(self):
+        parse_args = self.training["parse_args"]
+        self.assertTrue(parse_args([]).use_best_model)
+        self.assertFalse(parse_args(["--no-best-model"]).use_best_model)
+
+    def test_model_selection_restores_best_or_keeps_last_without_disabling_monitoring(self):
+        train = self.training["train_sh"]
+        for use_best, expected in ((True, 0.2), (False, 0.36)):
+            with self.subTest(use_best_model=use_best):
+                model = torch.nn.Linear(1, 1, bias=False)
+                model.N = 1
+                with torch.no_grad():
+                    model.weight.zero_()
+                optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=1)
+                x = torch.ones(1, 2, 1)
+                dataset = Mock()
+                dataset.sample_batch.return_value = (x, x, None)
+                dataset.eval_reference.return_value = (x[0], None)
+                dstsp = Mock(side_effect=[1.0, 2.0])
+                replacements = {
+                    "predict_sequence_using_gtf": lambda model, x, *args: model(x),
+                    "predict_free_sequence": lambda *args: torch.zeros(1, 2, 1),
+                    "state_space_divergence_binning": dstsp,
+                    "power_spectrum_error": Mock(return_value=0.0),
+                }
+                with patch.dict(train.__globals__, replacements):
+                    metrics = train(
+                        model, dataset, optimizer, scheduler, torch.nn.MSELoss(),
+                        num_epochs=2, alpha=1, n_interleave=1, device="cpu",
+                        batches_per_epoch=1, ssi=1, use_best_model=use_best,
+                    )
+                self.assertAlmostEqual(model.weight.item(), expected, places=6)
+                self.assertEqual(metrics["dstsp"], [1.0, 2.0])
+                self.assertEqual(dstsp.call_count, 2)
 
     def test_all_sixteen_configurations_match_explicit_equation(self):
         z = torch.tensor([[1., -2., 3., -4., -5., 6.], [-2., 3., -1., 2., 4., -6.]])

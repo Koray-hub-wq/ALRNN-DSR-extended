@@ -61,6 +61,12 @@ def parse_args(argv=None):
     parser.add_argument("--start-lr", type=float, default=1e-3)
     parser.add_argument("--end-lr", type=float, default=1e-5)
     parser.add_argument("--ssi", type=int, default=20)
+    parser.add_argument(
+        "--no-best-model",
+        dest="use_best_model",
+        action="store_false",
+        help="Save the final training state instead of restoring the lowest-Dstsp state. Monitoring remains enabled.",
+    )
     parser.add_argument("--t-gen", type=int, default=10000)
     parser.add_argument("--t-transient", type=int, default=1000)
     parser.add_argument("--gpu-id", type=int, default=0)
@@ -401,6 +407,8 @@ def main():
     print("Using device:", device)
     print("CPU threads:", args.cpu_threads)
     print("Active phi terms:", args.phi_terms or "none")
+    if not args.eval_only:
+        print("Model selection:", "lowest monitored Dstsp" if args.use_best_model else "final training state")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -525,6 +533,7 @@ def main():
             device=device,
             batches_per_epoch=args.batches_per_epoch,
             ssi=args.ssi,
+            use_best_model=args.use_best_model,
         )
 
         torch.save(model.state_dict(), model_path)
