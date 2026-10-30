@@ -103,6 +103,20 @@ Existing generated datasets can be reused directly; the sampling choice is made
 at training time. These options apply to the mixed dataset format; legacy
 fixed-length datasets retain their existing phi-balancing behavior.
 
+For the three combined Dadras datasets, activate the server's Python environment
+and run `bash alrnn_python/run_dadras_combined_cphi.sh 0` from the repository root
+(replace `0` with the GPU ID). The script trains one additive Cphi model per
+dataset in sequence, using length-weighted sampling and the final training state
+(`--no-best-model`). Its default data directory is
+`/export/home/klenkeit/training_data/mixed_parameter_trajectories/dadras/combined_dadras`.
+Models, metrics, evaluation plots and logs go under
+`alrnn_python/runs/term_ablations/dadras/combined_dadras_cphi/<run_id>/`.
+Use `DRY_RUN=1 bash alrnn_python/run_dadras_combined_cphi.sh 0` to preview the
+commands without starting training. Optional environment variables include
+`TRAINING_DATA_ROOT`, `PYTHON_BIN`, `RUN_ROOT`, `EPOCHS`, `LATENT_DIM`,
+`PWL_UNITS`, `BATCH_SIZE`, `BATCHES_PER_EPOCH`, `SEQUENCE_LENGTH`, `CPU_THREADS`
+and `SEED`.
+
 ## Example Models and Evaluation
 Trained example models are provided in [ALRNN_models](alrnn_python/models/). They can be evaluated using a simple evaluation provided in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The linear subregion analysis functions are provided in the &rarr; [`linear_region_functions`](alrnn_python/linear_region_functions.py) file. To calculate the dynamical system reconstruction quality, the state space distance $D_{stsp}$ and Hellinger dinstance $D_H$ can be calculated to evalute the geometrical and temoral agreement. These functions are provided in &rarr; [`performance measures`](alrnn_python/metrics.py).
 
