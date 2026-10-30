@@ -1,4 +1,4 @@
-"""Uniform trajectory sampling for padded, variable-length mixed datasets."""
+"""Length-weighted or uniform sampling for variable-length mixed datasets."""
 
 import numpy as np
 import torch
@@ -14,6 +14,7 @@ class MixedTrajectoryDataset:
         group_names=None,
         sequence_length=200,
         batch_size=16,
+        trajectory_sampling="length",
     ):
         data = np.asarray(data)
         if data.ndim != 3 or not data.shape[0] or not data.shape[2]:
@@ -32,6 +33,16 @@ class MixedTrajectoryDataset:
             raise ValueError("Every trajectory must retain at least two test samples")
         self.sequence_length = sequence_length
         self.batch_size = batch_size
+        if trajectory_sampling not in ("length", "uniform"):
+            raise ValueError("trajectory_sampling must be 'length' or 'uniform'")
+        self.trajectory_sampling = trajectory_sampling
+        if trajectory_sampling == "length":
+            weights = self.train_lengths.astype(np.float64)
+            self.sampling_strategy = "proportional_to_training_length"
+        else:
+            weights = np.ones(self.num_trajectories, dtype=np.float64)
+            self.sampling_strategy = "uniform_per_trajectory"
+        self.trajectory_probabilities = weights / weights.sum()
         self.train_indices = np.arange(self.num_trajectories)
         if external_inputs is not None:
             external_inputs = np.asarray(external_inputs)
@@ -76,9 +87,15 @@ class MixedTrajectoryDataset:
         return x, y, phi
 
     def sample_batch(self):
-        # Each original trajectory has equal probability, regardless of its
-        # length, parameter count, mode, or the number of blocks with that mode.
-        indices = np.random.randint(0, self.num_trajectories, size=self.batch_size)
+        # Weight by training samples, excluding test tails and NaN padding.
+        # Retain the original RNG calls for reproducible uniform-sampling runs.
+        if self.trajectory_sampling == "length":
+            indices = np.random.choice(
+                self.num_trajectories, size=self.batch_size, replace=True,
+                p=self.trajectory_probabilities,
+            )
+        else:
+            indices = np.random.randint(0, self.num_trajectories, size=self.batch_size)
         samples = [self._sample_one(int(index)) for index in indices]
         x, y, phi = zip(*samples)
         return torch.stack(x), torch.stack(y), None if phi[0] is None else torch.stack(phi)

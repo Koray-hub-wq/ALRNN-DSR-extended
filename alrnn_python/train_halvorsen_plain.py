@@ -23,6 +23,10 @@ def parse_args(argv=None):
         help="Use all trajectories in trajectories.npy instead of one trajectory.",
     )
     parser.add_argument(
+        "--trajectory-sampling", choices=("length", "uniform"), default="length",
+        help="Mixed datasets: weight trajectory selection by training length (default), or select trajectories uniformly.",
+    )
+    parser.add_argument(
         "--use-phi",
         action="store_true",
         help="Legacy shorthand for --phi-terms additive. Explicit --phi-terms takes precedence.",
@@ -453,12 +457,13 @@ def main():
             group_names=np.load(data_dir / "trajectory_group_names.npy"),
             sequence_length=args.sequence_length,
             batch_size=args.batch_size,
+            trajectory_sampling=args.trajectory_sampling,
         )
         T_train = int(dataset.train_lengths.max())
         T_test = int(dataset.test_lengths.max())
         N = trajectories.shape[-1]
         phi_dim = 0 if all_phi is None else all_phi.shape[-1]
-        print("Mixed multi-trajectory mode: uniform sampling per original trajectory")
+        print("Mixed multi-trajectory mode; sampling:", dataset.sampling_strategy)
         print("Training lengths:", dataset.train_lengths.tolist())
         print("Test lengths:", dataset.test_lengths.tolist())
         print("Evaluation groups:", dataset.eval_group_names)
@@ -694,7 +699,8 @@ def main():
                     **({
                         "trajectory_train_lengths": dataset.train_lengths.tolist(),
                         "trajectory_test_lengths": dataset.test_lengths.tolist(),
-                        "sampling": "uniform_per_trajectory",
+                        "sampling": dataset.sampling_strategy,
+                        "trajectory_sampling_probabilities": dataset.trajectory_probabilities.tolist(),
                     } if mixed_data else {}),
                     "N": int(N),
                     "phi_dim": int(phi_dim),

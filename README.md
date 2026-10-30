@@ -88,6 +88,21 @@ The model including its training algorithm is implemented in the &rarr; [`ALRNN_
 ## Dataset
 Data for the algorithm is expected to be a single trajectory in form of a $T \times N$ matrix (file format: `.npy`), where $T$ is the total number of time steps and $N$ is the data dimensionality. To generate a dataset for training, the `TimeSeriesDataset` class in the &rarr; [`dataset`](alrnn_python/dataset.py) file can be used.
 
+`alrnn_python/train_halvorsen_plain.py --multi-trajectory` also supports padded
+mixed datasets with `trajectory_lengths.npy` and `trajectory_train_lengths.npy`.
+By default, `--trajectory-sampling length` chooses trajectory i with probability
+`train_length[i] / sum(train_lengths)`, then chooses a valid window start
+uniformly inside its training prefix. With equal train fractions, a 100,000-step
+trajectory therefore contributes ten times as many windows on average as a
+10,000-step trajectory. Test tails and padding do not contribute to the weights.
+The weights use training steps, rather than subtracting the window length.
+
+Use `--trajectory-sampling uniform` to restore equal probability per trajectory.
+The selected policy and trajectory probabilities are saved in `metrics.json`.
+Existing generated datasets can be reused directly; the sampling choice is made
+at training time. These options apply to the mixed dataset format; legacy
+fixed-length datasets retain their existing phi-balancing behavior.
+
 ## Example Models and Evaluation
 Trained example models are provided in [ALRNN_models](alrnn_python/models/). They can be evaluated using a simple evaluation provided in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The linear subregion analysis functions are provided in the &rarr; [`linear_region_functions`](alrnn_python/linear_region_functions.py) file. To calculate the dynamical system reconstruction quality, the state space distance $D_{stsp}$ and Hellinger dinstance $D_H$ can be calculated to evalute the geometrical and temoral agreement. These functions are provided in &rarr; [`performance measures`](alrnn_python/metrics.py).
 

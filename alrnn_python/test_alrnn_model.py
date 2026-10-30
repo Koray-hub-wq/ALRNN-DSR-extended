@@ -33,6 +33,11 @@ class ALRNNModelTests(unittest.TestCase):
         self.assertTrue(parse_args([]).use_best_model)
         self.assertFalse(parse_args(["--no-best-model"]).use_best_model)
 
+    def test_trajectory_sampling_parser_defaults_and_override(self):
+        parse_args = self.training["parse_args"]
+        self.assertEqual(parse_args([]).trajectory_sampling, "length")
+        self.assertEqual(parse_args(["--trajectory-sampling", "uniform"]).trajectory_sampling, "uniform")
+
     def test_model_selection_restores_best_or_keeps_last_without_disabling_monitoring(self):
         train = self.training["train_sh"]
         for use_best, expected in ((True, 0.2), (False, 0.36)):
@@ -106,6 +111,8 @@ class ALRNNModelTests(unittest.TestCase):
                 self.assertEqual(dstsp.call_count, sum(count > 0 for count in expected_steps))
                 if mode == "mixed":
                     self.assertEqual([result["test_steps_available"] for result in results], [10, 14, 18])
+                    self.assertEqual(saved["sampling"], "proportional_to_training_length")
+                    np.testing.assert_allclose(saved["trajectory_sampling_probabilities"], [1 / 3] * 3)
                 for result, count in zip(results, expected_steps):
                     plot = output / f'{result["file_stem"]}_free_rollout_3d.png'
                     self.assertEqual(plot.exists(), count > 0)
