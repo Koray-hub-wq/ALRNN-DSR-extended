@@ -1,4 +1,4 @@
-"""Uniform trajectory sampling for padded, variable-length mixed datasets."""
+"""Window sampling for mixed datasets, with optional constant-phi balancing."""
 
 import numpy as np
 import torch
@@ -14,6 +14,7 @@ class MixedTrajectoryDataset:
         group_names=None,
         sequence_length=200,
         batch_size=16,
+        balanced_phi=False,
     ):
         data = np.asarray(data)
         if data.ndim != 3 or not data.shape[0] or not data.shape[2]:
@@ -53,6 +54,42 @@ class MixedTrajectoryDataset:
         self.eval_indices_by_group = {
             name: np.flatnonzero(self.group_names == name) for name in self.eval_group_names
         }
+        self.balanced_phi_requested = bool(balanced_phi)
+        self.balanced_phi = False
+        self.sampling_reason = "balancing_not_requested"
+        self.unique_phi = []
+        self.indices_by_phi = []
+        if balanced_phi:
+            if external_inputs is None or external_inputs.shape[-1] != 1:
+                raise ValueError("Balanced mixed sampling requires one scalar external phi input")
+            constants = external_inputs[:, 0, 0]
+            for index, length in enumerate(self.lengths):
+                if not np.allclose(external_inputs[index, :length, 0], constants[index], atol=1e-5, rtol=0):
+                    self.sampling_reason = "time_varying_phi_present"
+                    break
+            else:
+                # Merge numerically equivalent constants, ignoring NaN padding.
+                for index in np.argsort(constants, kind="stable"):
+                    value = float(constants[index])
+                    if not self.unique_phi or not np.isclose(value, self.unique_phi[-1], atol=1e-5, rtol=0):
+                        self.unique_phi.append(value)
+                        self.indices_by_phi.append([])
+                    self.indices_by_phi[-1].append(int(index))
+                self.balanced_phi = True
+                self.sampling_reason = "all_trajectories_have_constant_phi"
+        self.sampling = "balanced_per_phi_per_batch" if self.balanced_phi else "uniform_per_trajectory"
+
+    def sampling_metadata(self):
+        return {
+            "balanced_phi_requested": self.balanced_phi_requested,
+            "balanced_phi_active": self.balanced_phi,
+            "reason": self.sampling_reason,
+            "phi_tolerance": 1e-5,
+            "phi_values": self.unique_phi,
+            "trajectories_per_phi": [len(indices) for indices in self.indices_by_phi],
+            "window_start_sampling": "uniform_within_training_prefix",
+            "remainder_allocation": "random_per_batch" if self.balanced_phi else None,
+        }
 
     def _validate_lengths(self, lengths, name):
         values = np.asarray(lengths)
@@ -76,9 +113,17 @@ class MixedTrajectoryDataset:
         return x, y, phi
 
     def sample_batch(self):
-        # Each original trajectory has equal probability, regardless of its
-        # length, parameter count, mode, or the number of blocks with that mode.
-        indices = np.random.randint(0, self.num_trajectories, size=self.batch_size)
+        if self.balanced_phi:
+            n_values = len(self.unique_phi)
+            base, remainder = divmod(self.batch_size, n_values)
+            counts = np.full(n_values, base, dtype=int)
+            counts[np.random.permutation(n_values)[:remainder]] += 1
+            indices = []
+            for pool, count in zip(self.indices_by_phi, counts):
+                indices.extend(np.random.choice(pool, size=int(count), replace=True))
+            np.random.shuffle(indices)
+        else:
+            indices = np.random.randint(0, self.num_trajectories, size=self.batch_size)
         samples = [self._sample_one(int(index)) for index in indices]
         x, y, phi = zip(*samples)
         return torch.stack(x), torch.stack(y), None if phi[0] is None else torch.stack(phi)

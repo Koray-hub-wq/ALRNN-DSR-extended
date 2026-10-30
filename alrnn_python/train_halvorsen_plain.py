@@ -40,6 +40,11 @@ def parse_args(argv=None):
         help="Disable balanced per-phi sampling for multi-trajectory data.",
     )
     parser.add_argument(
+        "--mixed-balanced-phi",
+        action="store_true",
+        help="Experimental: balance every mixed-data batch across constant phi values. If any trajectory has time-varying phi, retain uniform trajectory sampling.",
+    )
+    parser.add_argument(
         "--train-phi-values",
         type=float,
         nargs="*",
@@ -427,6 +432,8 @@ def main():
 
     data_dir = Path(args.data_dir)
     mixed_data = (data_dir / "trajectory_lengths.npy").exists()
+    if args.mixed_balanced_phi and (not mixed_data or not args.use_phi):
+        raise ValueError("--mixed-balanced-phi requires a mixed dataset and an active phi input term")
     if mixed_data and not args.multi_trajectory:
         raise ValueError("Mixed datasets require --multi-trajectory to respect all saved trajectory lengths")
     trajectories = np.load(data_dir / "trajectories.npy").astype(np.float32)
@@ -453,12 +460,14 @@ def main():
             group_names=np.load(data_dir / "trajectory_group_names.npy"),
             sequence_length=args.sequence_length,
             batch_size=args.batch_size,
+            balanced_phi=args.mixed_balanced_phi,
         )
         T_train = int(dataset.train_lengths.max())
         T_test = int(dataset.test_lengths.max())
         N = trajectories.shape[-1]
         phi_dim = 0 if all_phi is None else all_phi.shape[-1]
-        print("Mixed multi-trajectory mode: uniform sampling per original trajectory")
+        print("Mixed multi-trajectory sampling:", dataset.sampling)
+        print("Sampling configuration:", dataset.sampling_metadata())
         print("Training lengths:", dataset.train_lengths.tolist())
         print("Test lengths:", dataset.test_lengths.tolist())
         print("Evaluation groups:", dataset.eval_group_names)
@@ -694,7 +703,8 @@ def main():
                     **({
                         "trajectory_train_lengths": dataset.train_lengths.tolist(),
                         "trajectory_test_lengths": dataset.test_lengths.tolist(),
-                        "sampling": "uniform_per_trajectory",
+                        "sampling": dataset.sampling,
+                        "sampling_configuration": dataset.sampling_metadata(),
                     } if mixed_data else {}),
                     "N": int(N),
                     "phi_dim": int(phi_dim),
