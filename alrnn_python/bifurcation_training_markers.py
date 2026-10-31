@@ -4,6 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
+from trajectory_storage import trajectory_offsets, trajectory_view, validate_trajectory_array
+
 
 class TrainingParameterRange(np.ndarray):
     """Two raw-parameter bounds, tagged as a filled region rather than lines.
@@ -33,6 +35,8 @@ def alrnn_training_parameters(data_dir, metadata, regime, settings):
     backend to keep its original discovery logic for that dataset.
     """
     data_dir = Path(data_dir)
+    if (data_dir / ".compact_in_progress.json").exists():
+        raise ValueError("Dataset conversion is incomplete; rerun compact_mixed_datasets.py first")
     raw_path = data_dir / "trajectory_phi_raw.npy"
     phi_path = data_dir / "trajectory_phi.npy"
     if not raw_path.is_file() and not phi_path.is_file():
@@ -53,10 +57,17 @@ def alrnn_training_parameters(data_dir, metadata, regime, settings):
 
     raw_source = raw_path.is_file()
     array = np.load(raw_path if raw_source else phi_path, mmap_mode="r", allow_pickle=False)
-    if array.ndim != 3 or array.shape[2] != 1 or not array.shape[0]:
-        raise ValueError("Trajectory parameters must have shape (trajectories, time, 1)")
-    count, padded_time, _ = array.shape
-    lengths = _lengths(data_dir, "trajectory_lengths.npy", count, padded_time)
+    if array.ndim not in (2, 3) or array.shape[-1] != 1 or not array.shape[0]:
+        raise ValueError("Trajectory parameters must have padded 3D or compact 2D shape with one channel")
+    if array.ndim == 2:
+        lengths = np.load(data_dir / "trajectory_lengths.npy", allow_pickle=False)
+        offsets = trajectory_offsets(lengths)
+        count, padded_time = len(lengths), int(max(lengths))
+    else:
+        count, padded_time, _ = array.shape
+        lengths = _lengths(data_dir, "trajectory_lengths.npy", count, padded_time)
+        offsets = trajectory_offsets(lengths)
+    validate_trajectory_array(array, lengths, offsets)
     train_path = data_dir / "trajectory_train_lengths.npy"
     if train_path.is_file():
         train_lengths = _lengths(data_dir, train_path.name, count, padded_time)
@@ -86,7 +97,7 @@ def alrnn_training_parameters(data_dir, metadata, regime, settings):
         length, train_length = int(lengths[index]), int(train_lengths[index])
         if not 1 <= train_length <= length <= padded_time:
             raise ValueError(f"Invalid training/trajectory lengths for trajectory {index}")
-        values = np.asarray(array[index, :train_length, 0], dtype=np.float64)
+        values = np.asarray(trajectory_view(array, index, lengths, offsets)[:train_length, 0], dtype=np.float64)
         if not np.isfinite(values).all():
             raise ValueError(f"Non-finite training parameters in trajectory {index}")
         if not raw_source:

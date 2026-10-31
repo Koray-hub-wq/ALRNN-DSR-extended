@@ -3,6 +3,8 @@
 import numpy as np
 import torch
 
+from trajectory_storage import trajectory_offsets, trajectory_view, validate_trajectory_array
+
 
 class MixedTrajectoryDataset:
     def __init__(
@@ -17,13 +19,11 @@ class MixedTrajectoryDataset:
         trajectory_sampling="length",
     ):
         data = np.asarray(data)
-        if data.ndim != 3 or not data.shape[0] or not data.shape[2]:
-            raise ValueError("data must have shape (trajectories, padded_time, channels)")
-        self.num_trajectories = data.shape[0]
+        self.num_trajectories = len(lengths)
         self.lengths = self._validate_lengths(lengths, "lengths")
+        self.offsets = trajectory_offsets(self.lengths)
+        validate_trajectory_array(data, self.lengths, self.offsets)
         self.train_lengths = self._validate_lengths(train_lengths, "train_lengths")
-        if np.any(self.lengths > data.shape[1]):
-            raise ValueError("lengths exceed the padded time dimension")
         if sequence_length < 1 or batch_size < 1:
             raise ValueError("sequence_length and batch_size must be positive")
         if np.any(self.train_lengths < sequence_length + 1):
@@ -46,12 +46,13 @@ class MixedTrajectoryDataset:
         self.train_indices = np.arange(self.num_trajectories)
         if external_inputs is not None:
             external_inputs = np.asarray(external_inputs)
-            if external_inputs.ndim != 3 or external_inputs.shape[:2] != data.shape[:2]:
+            validate_trajectory_array(external_inputs, self.lengths, self.offsets)
+            if external_inputs.ndim != data.ndim or external_inputs.shape[:-1] != data.shape[:-1]:
                 raise ValueError("external_inputs must match data's trajectory and time dimensions")
         for index, length in enumerate(self.lengths):
-            if not np.isfinite(data[index, :length]).all():
+            if not np.isfinite(trajectory_view(data, index, self.lengths, self.offsets)).all():
                 raise ValueError(f"Non-finite observations inside valid trajectory {index}")
-            if external_inputs is not None and not np.isfinite(external_inputs[index, :length]).all():
+            if external_inputs is not None and not np.isfinite(trajectory_view(external_inputs, index, self.lengths, self.offsets)).all():
                 raise ValueError(f"Non-finite phi inside valid trajectory {index}")
         self.X_all = torch.as_tensor(data, dtype=torch.float32)
         self.S_all = None if external_inputs is None else torch.as_tensor(external_inputs, dtype=torch.float32)
@@ -81,9 +82,10 @@ class MixedTrajectoryDataset:
         n_starts = self.train_lengths[trajectory_index] - self.sequence_length
         start = np.random.randint(0, n_starts)
         end = start + self.sequence_length
-        x = self.X_all[trajectory_index, start:end]
-        y = self.X_all[trajectory_index, start + 1:end + 1]
-        phi = None if self.S_all is None else self.S_all[trajectory_index, start:end]
+        states = trajectory_view(self.X_all, trajectory_index, self.lengths, self.offsets)
+        x = states[start:end]
+        y = states[start + 1:end + 1]
+        phi = None if self.S_all is None else trajectory_view(self.S_all, trajectory_index, self.lengths, self.offsets)[start:end]
         return x, y, phi
 
     def sample_batch(self):
@@ -102,8 +104,8 @@ class MixedTrajectoryDataset:
 
     def eval_reference(self, length=10000, trajectory_index=0):
         end = min(length, int(self.train_lengths[trajectory_index]))
-        x = self.X_all[trajectory_index, :end]
-        phi = None if self.S_all is None else self.S_all[trajectory_index, :end]
+        x = trajectory_view(self.X_all, trajectory_index, self.lengths, self.offsets)[:end]
+        phi = None if self.S_all is None else trajectory_view(self.S_all, trajectory_index, self.lengths, self.offsets)[:end]
         return x, phi
 
     def test_trajectory(self, trajectory_index, length=None):
@@ -111,6 +113,6 @@ class MixedTrajectoryDataset:
         end = int(self.lengths[trajectory_index])
         if length is not None:
             end = min(end, start + length)
-        x = self.X_all[trajectory_index, start:end]
-        phi = None if self.S_all is None else self.S_all[trajectory_index, start:end]
+        x = trajectory_view(self.X_all, trajectory_index, self.lengths, self.offsets)[start:end]
+        phi = None if self.S_all is None else trajectory_view(self.S_all, trajectory_index, self.lengths, self.offsets)[start:end]
         return x, phi

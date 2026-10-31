@@ -74,6 +74,7 @@ class ALRNNModelTests(unittest.TestCase):
     def test_short_test_sections_are_skipped_and_actual_metric_lengths_are_saved(self):
         main = self.training["main"]
         for mode, transient in (("mixed", 12), ("mixed", 100), ("mixed", 0),
+                                ("compact", 12),
                                 ("single", 100), ("multi", 100)):
             with self.subTest(mode=mode, transient=transient), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -82,10 +83,12 @@ class ALRNNModelTests(unittest.TestCase):
                 data_dir.mkdir()
                 data = np.random.default_rng(17).normal(size=(3, 48, 3)).astype(np.float32)
                 np.save(data_dir / "trajectories.npy", data)
-                if mode == "mixed":
+                if mode in ("mixed", "compact"):
                     np.save(data_dir / "trajectory_lengths.npy", np.array([40, 44, 48]))
                     np.save(data_dir / "trajectory_train_lengths.npy", np.array([30, 30, 30]))
                     np.save(data_dir / "trajectory_group_names.npy", np.array(["a", "b", "c"]))
+                    if mode == "compact":
+                        np.save(data_dir / "trajectories.npy", np.concatenate([data[i, :n] for i, n in enumerate([40, 44, 48])]))
                 flags = ["--data-dir", str(data_dir), "--output-dir", str(output),
                          "--force-cpu", "--latent-dim", "6", "--pwl-units", "2",
                          "--split-idx", "30", "--sequence-length", "4",
@@ -109,7 +112,7 @@ class ALRNNModelTests(unittest.TestCase):
                 expected_steps = [0, 2, 5] if transient == 12 else ([5, 5, 5] if transient == 0 else [0] * len(results))
                 self.assertEqual([result["metric_steps"] for result in results], expected_steps)
                 self.assertEqual(dstsp.call_count, sum(count > 0 for count in expected_steps))
-                if mode == "mixed":
+                if mode in ("mixed", "compact"):
                     self.assertEqual([result["test_steps_available"] for result in results], [10, 14, 18])
                     self.assertEqual(saved["sampling"], "proportional_to_training_length")
                     np.testing.assert_allclose(saved["trajectory_sampling_probabilities"], [1 / 3] * 3)

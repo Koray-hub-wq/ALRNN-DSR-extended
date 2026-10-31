@@ -88,7 +88,7 @@ The model including its training algorithm is implemented in the &rarr; [`ALRNN_
 ## Dataset
 Data for the algorithm is expected to be a single trajectory in form of a $T \times N$ matrix (file format: `.npy`), where $T$ is the total number of time steps and $N$ is the data dimensionality. To generate a dataset for training, the `TimeSeriesDataset` class in the &rarr; [`dataset`](alrnn_python/dataset.py) file can be used.
 
-`alrnn_python/train_halvorsen_plain.py --multi-trajectory` also supports padded
+`alrnn_python/train_halvorsen_plain.py --multi-trajectory` also supports compact (v2) and padded (v1)
 mixed datasets with `trajectory_lengths.npy` and `trajectory_train_lengths.npy`.
 By default, `--trajectory-sampling length` chooses trajectory i with probability
 `train_length[i] / sum(train_lengths)`, then chooses a valid window start
@@ -102,6 +102,16 @@ The selected policy and trajectory probabilities are saved in `metrics.json`.
 Existing generated datasets can be reused directly; the sampling choice is made
 at training time. These options apply to the mixed dataset format; legacy
 fixed-length datasets retain their existing phi-balancing behavior.
+
+Compact mixed datasets store `trajectories.npy` as `(sum(lengths), channels)`
+and phi as `(sum(lengths), phi_channels)`, concatenated in trajectory order.
+Offsets are derived from `trajectory_lengths.npy`; no padding or object arrays
+are needed. Sampling and evaluation respect every trajectory boundary in both
+formats. Existing padded datasets remain readable. The generator's
+`compact_mixed_datasets.py` converts completed v1 datasets in place, with
+byte-for-byte verification, without changing values, training splits or paths.
+Update this repository on the server before using converted datasets.
+
 
 For the three combined Dadras datasets, activate the server's Python environment
 and run `bash alrnn_python/run_dadras_combined_cphi.sh 0` from the repository root

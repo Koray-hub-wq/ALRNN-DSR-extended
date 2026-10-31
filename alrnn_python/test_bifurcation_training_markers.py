@@ -41,6 +41,27 @@ class TrainingMarkerTests(unittest.TestCase):
     def resolve(self, **settings):
         return alrnn_training_parameters(self.data_dir, self.metadata, self.regime, self.settings | settings)
 
+    def test_compact_parameters_keep_the_same_training_band_or_constant_markers(self):
+        for trajectories, lengths in (([np.linspace(-1, 1, 11), np.zeros(8)], [6, 5]),
+                                      ([np.full(8, -1), np.full(5, -0.5)], [6, 3])):
+            for normalized in (False, True):
+                for name in ("trajectory_phi.npy", "trajectory_phi_raw.npy"):
+                    (self.data_dir / name).unlink(missing_ok=True)
+                self.save_phi(trajectories, train_lengths=lengths, normalized=normalized)
+                expected = self.resolve()
+                path = self.data_dir / ("trajectory_phi.npy" if normalized else "trajectory_phi_raw.npy")
+                padded = np.load(path)
+                np.save(path, np.concatenate([padded[i, :len(values)] for i, values in enumerate(trajectories)]))
+                actual = self.resolve()
+                self.assertIs(type(actual), type(expected))
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_incomplete_conversion_blocks_parameter_reading(self):
+        self.save_phi([np.zeros(8)], train_lengths=[5])
+        (self.data_dir / ".compact_in_progress.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "conversion is incomplete"):
+            self.resolve()
+
     def test_mixed_training_shades_one_range_and_excludes_test_tail(self):
         self.save_phi([np.full(11, -1.0), np.linspace(-1, 1, 11), np.zeros(8)],
                       train_lengths=[8, 6, 5])

@@ -433,9 +433,11 @@ def main():
     mixed_data = (data_dir / "trajectory_lengths.npy").exists()
     if mixed_data and not args.multi_trajectory:
         raise ValueError("Mixed datasets require --multi-trajectory to respect all saved trajectory lengths")
-    trajectories = np.load(data_dir / "trajectories.npy").astype(np.float32)
+    if (data_dir / ".compact_in_progress.json").exists():
+        raise ValueError("Dataset conversion is incomplete; rerun compact_mixed_datasets.py first")
+    trajectories = np.load(data_dir / "trajectories.npy").astype(np.float32, copy=False)
     all_phi = (
-        np.load(data_dir / "trajectory_phi.npy").astype(np.float32)
+        np.load(data_dir / "trajectory_phi.npy").astype(np.float32, copy=False)
         if args.use_phi
         else None
     )
