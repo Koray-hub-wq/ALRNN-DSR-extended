@@ -157,23 +157,57 @@ and `SEED`.
 For the balanced Combined-Dadras experiment, use the current main trainer via:
 
 ```bash
-bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0
+bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0 1 2 3 4 5
 ```
 
-This wrapper enables `--mixed-balanced-sampling` with ten time sections and
-uses the current settings from `run_dadras_combined_cphi.sh`: 300 latent
-dimensions, 150 PWL units, 1,000 epochs, batch size 80 and 100 batches per epoch,
-with the final training state saved. It uses the same data root above and
-trains the three parameter ranges sequentially on the chosen GPU. Models and
-logs go under
-`alrnn_python/runs/term_ablations/dadras/combined_dadras_balanced_cphi/<run_id>/`.
-Activate the Python environment first. Update this repository on the server;
-the generator folder and regenerated datasets are not required.
+The script now starts six independent training jobs: both model variants on
+each of the three datasets. Pass one to six distinct GPU IDs; the queue keeps
+at most one job active per selected GPU and starts the next job when a GPU is
+free. With only `0`, all jobs run sequentially. The two model variants are:
+
+| Variant | Phi terms | Latent dimensions | PWL units |
+| --- | --- | --- | --- |
+| `cphi` | `additive` | 300 | 150 |
+| `cphi_shifted_relu` | `additive shifted-relu` | 200 | 100 |
+
+Both use balanced mixed sampling with ten time sections, 1,000 epochs, batch
+size 80 and 100 batches per epoch, and save the final training state. Data come
+from the same Combined-Dadras root above. Models are stored under
+`alrnn_python/runs/term_ablations/dadras/combined_dadras_balanced/<run_id>/<variant>/<dataset>/`.
+The run root also contains `logs/`, `plan.json`, `gpu_ids.json` and
+`summary.json` with per-job exit codes.
+
+After training, two GPU jobs produce bifurcation comparisons, one per model
+variant, containing its three trained models plus ground truth. They use the
+saved global training normalization and shade the actual training parameter
+ranges. The default sweep is raw Dadras e = 4.9 to 6.2, 320 parameter values,
+component z; the simulation dt is read from the datasets. The existing plotting
+backend also writes the individual model diagrams, caches and provenance files.
+Results go under
+`alrnn_python/bifurcation_diagrams/term_ablations/dadras/combined_dadras_balanced/<run_id>/<variant>/`.
+A failed training skips its own variant's comparison; the other variant can
+still finish. Interrupted queues terminate their child processes.
+
+Activate the Python environment first and update this repository on the server.
+The existing bifurcation backend is expected at
+`$HOME/diffrentbutconst_prams/compare_model_bifurcation_diagrams.py` as in the
+other server scripts; set `BIFURCATION_DIR` if it lives elsewhere. No dataset
+regeneration is needed. Before long GPU jobs start, all three datasets and their
+global normalization are checked.
 
 ```bash
-DRY_RUN=1 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0
-TIME_SAMPLING_BINS=20 EPOCHS=500 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0
+DRY_RUN=1 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0 1 2 3 4 5
+TIME_SAMPLING_BINS=20 EPOCHS=500 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0 1
 ```
+
+Dry runs print all eight commands without needing data, CUDA or creating files.
+Shared overrides include `TRAINING_DATA_ROOT`, `PYTHON_BIN`, `EPOCHS`,
+`BATCH_SIZE`, `BATCHES_PER_EPOCH`, `SEQUENCE_LENGTH`, `TIME_SAMPLING_BINS`,
+`CPU_THREADS`, `SEED`, `RUN_ROOT` and `PLOT_ROOT`. Variant sizes can be overridden
+with `CPHI_LATENT_DIM`, `CPHI_PWL_UNITS`, `SHIFTED_LATENT_DIM` and
+`SHIFTED_PWL_UNITS`; the old `LATENT_DIM`/`PWL_UNITS` overrides affect Cphi only.
+Plot settings use `BIFURCATION_PARAMETER_MIN`, `BIFURCATION_PARAMETER_MAX`,
+`BIFURCATION_NUM_PARAMETERS` and `BIFURCATION_COMPONENTS` (e.g. `"x y z"`).
 
 The original runner also accepts `MIXED_BALANCED_SAMPLING=1` and
 `TIME_SAMPLING_BINS=10`; its default remains the original length-weighted sampler.
