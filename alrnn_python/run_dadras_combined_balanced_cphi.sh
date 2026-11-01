@@ -2,9 +2,13 @@
 set -euo pipefail
 
 # Six trainings: three datasets x (Cphi or Cphi + shifted ReLU), then bifurcations.
-# Activate the desired Python environment first.
+# Activate the b-tipping venv, as in the other server launchers.
 # Usage: bash alrnn_python/run_dadras_combined_balanced_cphi.sh [GPU_ID ...] (1-6 GPUs)
 # Preview: DRY_RUN=1 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0 1 2 3 4 5
+ROOT_DIR="${ROOT_DIR:-$HOME}"
+BTIP_REPO="$ROOT_DIR/DynaMix-python-b-tipping"
+source "$BTIP_REPO/venv/bin/activate"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python_bin="${PYTHON_BIN:-python}"
 training_data_root="${TRAINING_DATA_ROOT:-/export/home/klenkeit/training_data/mixed_parameter_trajectories/dadras/combined_dadras}"

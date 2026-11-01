@@ -188,7 +188,9 @@ Results go under
 A failed training skips its own variant's comparison; the other variant can
 still finish. Interrupted queues terminate their child processes.
 
-Activate the Python environment first and update this repository on the server.
+The balanced launcher automatically activates
+`${ROOT_DIR:-$HOME}/DynaMix-python-b-tipping/venv/bin/activate`, as in the other
+server scripts (including dry runs). Update this repository on the server.
 The existing bifurcation backend is expected at
 `$HOME/diffrentbutconst_prams/compare_model_bifurcation_diagrams.py` as in the
 other server scripts; set `BIFURCATION_DIR` if it lives elsewhere. No dataset
