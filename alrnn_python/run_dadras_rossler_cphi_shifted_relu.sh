@@ -17,7 +17,7 @@ if (( ${#gpu_ids[@]} == 0 )); then
 fi
 
 latents_dim=200
-pwl_units=20
+pwl_units=100
 epochs=750
 batch_size=80
 batches_per_epoch=100

@@ -27,10 +27,26 @@ batches_per_epoch="${BATCHES_PER_EPOCH:-100}"
 sequence_length="${SEQUENCE_LENGTH:-200}"
 cpu_threads="${CPU_THREADS:-4}"
 seed="${SEED:-7}"
+mixed_balanced_sampling="${MIXED_BALANCED_SAMPLING:-0}"
+time_sampling_bins="${TIME_SAMPLING_BINS:-10}"
+if [[ "$mixed_balanced_sampling" != 0 && "$mixed_balanced_sampling" != 1 ]]; then
+  printf 'MIXED_BALANCED_SAMPLING must be 0 or 1.\n' >&2
+  exit 2
+fi
+if [[ ! "$time_sampling_bins" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'TIME_SAMPLING_BINS must be a positive integer.\n' >&2
+  exit 2
+fi
+sampling_args=(--trajectory-sampling length)
+run_group=combined_dadras_cphi
+if [[ "$mixed_balanced_sampling" == 1 ]]; then
+  sampling_args+=(--mixed-balanced-sampling --time-sampling-bins "$time_sampling_bins")
+  run_group=combined_dadras_balanced_cphi
+fi
 
 DATASETS=(dadras_e_5p9_to_6p2 dadras_e_5p2_to_5p7 dadras_e_5p2_to_6p2)
 run_id="$(date +%Y%m%d_%H%M%S)_$$_m${latent_dim}_p${pwl_units}"
-RUN_ROOT="${RUN_ROOT:-$SCRIPT_DIR/runs/term_ablations/dadras/combined_dadras_cphi/$run_id}"
+RUN_ROOT="${RUN_ROOT:-$SCRIPT_DIR/runs/term_ablations/dadras/$run_group/$run_id}"
 
 export OMP_NUM_THREADS="$cpu_threads" MKL_NUM_THREADS="$cpu_threads"
 export OPENBLAS_NUM_THREADS="$cpu_threads" NUMEXPR_NUM_THREADS="$cpu_threads"
@@ -68,11 +84,12 @@ PY
 fi
 
 printf 'Cphi training on GPU %s | data: %s\nModels and logs: %s\n' "$gpu_id" "$TRAINING_DATA_ROOT" "$RUN_ROOT"
+printf 'Balanced mixed sampling: %s | dynamic time sections: %s\n' "$mixed_balanced_sampling" "$time_sampling_bins"
 for dataset in "${DATASETS[@]}"; do
   command=(
     "$python_bin" -u "$SCRIPT_DIR/train_halvorsen_plain.py"
     --data-dir "$TRAINING_DATA_ROOT/$dataset"
-    --multi-trajectory --phi-terms additive --trajectory-sampling length
+    --multi-trajectory --phi-terms additive "${sampling_args[@]}"
     --gpu-id "$gpu_id" --cpu-threads "$cpu_threads"
     --latent-dim "$latent_dim" --pwl-units "$pwl_units"
     --epochs "$epochs" --batch-size "$batch_size"

@@ -38,6 +38,17 @@ class ALRNNModelTests(unittest.TestCase):
         self.assertEqual(parse_args([]).trajectory_sampling, "length")
         self.assertEqual(parse_args(["--trajectory-sampling", "uniform"]).trajectory_sampling, "uniform")
 
+    def test_mixed_balancing_parser_and_validation(self):
+        parse_args = self.training["parse_args"]
+        self.assertFalse(parse_args([]).mixed_balanced_sampling)
+        balanced = parse_args(["--mixed-balanced-sampling", "--time-sampling-bins", "20"])
+        self.assertTrue(balanced.mixed_balanced_sampling)
+        self.assertEqual(balanced.time_sampling_bins, 20)
+        for flags in (["--time-sampling-bins", "0"],
+                      ["--mixed-balanced-sampling", "--no-balanced-phi"]):
+            with self.assertRaises(SystemExit):
+                parse_args(flags)
+
     def test_model_selection_restores_best_or_keeps_last_without_disabling_monitoring(self):
         train = self.training["train_sh"]
         for use_best, expected in ((True, 0.2), (False, 0.36)):
@@ -74,7 +85,7 @@ class ALRNNModelTests(unittest.TestCase):
     def test_short_test_sections_are_skipped_and_actual_metric_lengths_are_saved(self):
         main = self.training["main"]
         for mode, transient in (("mixed", 12), ("mixed", 100), ("mixed", 0),
-                                ("compact", 12),
+                                ("compact", 12), ("balanced_compact", 12),
                                 ("single", 100), ("multi", 100)):
             with self.subTest(mode=mode, transient=transient), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -83,11 +94,16 @@ class ALRNNModelTests(unittest.TestCase):
                 data_dir.mkdir()
                 data = np.random.default_rng(17).normal(size=(3, 48, 3)).astype(np.float32)
                 np.save(data_dir / "trajectories.npy", data)
-                if mode in ("mixed", "compact"):
+                if mode in ("mixed", "compact", "balanced_compact"):
                     np.save(data_dir / "trajectory_lengths.npy", np.array([40, 44, 48]))
                     np.save(data_dir / "trajectory_train_lengths.npy", np.array([30, 30, 30]))
                     np.save(data_dir / "trajectory_group_names.npy", np.array(["a", "b", "c"]))
-                    if mode == "compact":
+                    if mode == "balanced_compact":
+                        phi = np.stack([np.full((48, 1), -0.5), np.full((48, 1), 0.5),
+                                        np.linspace(-1, 1, 48).reshape(48, 1)]).astype(np.float32)
+                        np.save(data_dir / "trajectory_phi.npy", np.concatenate([phi[i, :n] for i, n in enumerate([40, 44, 48])]))
+                        np.save(data_dir / "trajectory_modes.npy", ["constant", "constant", "sinusoidal"])
+                    if mode in ("compact", "balanced_compact"):
                         np.save(data_dir / "trajectories.npy", np.concatenate([data[i, :n] for i, n in enumerate([40, 44, 48])]))
                 flags = ["--data-dir", str(data_dir), "--output-dir", str(output),
                          "--force-cpu", "--latent-dim", "6", "--pwl-units", "2",
@@ -95,6 +111,8 @@ class ALRNNModelTests(unittest.TestCase):
                          "--t-gen", "5", "--t-transient", str(transient)]
                 if mode != "single":
                     flags.append("--multi-trajectory")
+                if mode == "balanced_compact":
+                    flags.extend(["--mixed-balanced-sampling", "--phi-terms", "additive"])
                 parsed = self.training["parse_args"](flags)
                 dstsp = Mock(return_value=1.25)
                 replacements = {
@@ -112,9 +130,15 @@ class ALRNNModelTests(unittest.TestCase):
                 expected_steps = [0, 2, 5] if transient == 12 else ([5, 5, 5] if transient == 0 else [0] * len(results))
                 self.assertEqual([result["metric_steps"] for result in results], expected_steps)
                 self.assertEqual(dstsp.call_count, sum(count > 0 for count in expected_steps))
-                if mode in ("mixed", "compact"):
+                if mode in ("mixed", "compact", "balanced_compact"):
                     self.assertEqual([result["test_steps_available"] for result in results], [10, 14, 18])
-                    self.assertEqual(saved["sampling"], "proportional_to_training_length")
+                    expected_sampling = "proportional_to_training_length"
+                    if mode == "balanced_compact":
+                        expected_sampling += "_balanced_constants_and_time_sections"
+                        self.assertTrue(saved["mixed_sampling"]["balanced"])
+                        self.assertEqual(saved["mixed_sampling"]["constant_phi_values"], [-0.5, 0.5])
+                        self.assertEqual(saved["mixed_sampling"]["effective_time_bins"], [0, 0, 10])
+                    self.assertEqual(saved["sampling"], expected_sampling)
                     np.testing.assert_allclose(saved["trajectory_sampling_probabilities"], [1 / 3] * 3)
                 for result, count in zip(results, expected_steps):
                     plot = output / f'{result["file_stem"]}_free_rollout_3d.png'

@@ -103,6 +103,33 @@ Existing generated datasets can be reused directly; the sampling choice is made
 at training time. These options apply to the mixed dataset format; legacy
 fixed-length datasets retain their existing phi-balancing behavior.
 
+Add `--mixed-balanced-sampling --time-sampling-bins 10` for balanced sampling
+inside a mixed dataset. The initial trajectory draw still uses
+`--trajectory-sampling length` (or `uniform`). Every dynamic trajectory selection
+and the total number of constant windows in each batch are preserved. Constant
+slots are redistributed equally among the available fixed phi values, with
+counts differing by at most one per batch; leftover slots are assigned randomly.
+Equal parameter values are pooled across repeated constant blocks. Within each
+value, trajectories retain their relative training-length weights.
+
+Each dynamic trajectory divides its valid training-window starts into ten time
+sections and visits every section once per shuffled cycle. Within a section,
+the start is random; cycles continue across batches and epochs. If fewer than
+ten valid starts exist, the number of sections is reduced. Constant trajectories
+keep uniformly random starts. Test tails and padding are never sampled. Time
+sections balance temporal coverage; a sinusoidal trajectory retains its natural
+nonuniform distribution over parameter values. The sampler does not equalize
+the proportions of constant, sinusoidal, increasing or decreasing modes.
+
+`trajectory_modes.npy` identifies constant/dynamic source trajectories when
+available; otherwise only training-prefix phi values are inspected. Balancing
+also works with `--phi-terms none`, without adding phi inputs to the model.
+`--no-balanced-phi` remains a legacy fixed-length option. Existing mixed
+training commands keep their original behavior unless the new flag is added.
+`metrics.json` records the effective trajectory probabilities and a
+`mixed_sampling` entry containing baseline probabilities, fixed phi values,
+time-section settings, actual trajectory counts and time-section visit counts.
+
 Compact mixed datasets store `trajectories.npy` as `(sum(lengths), channels)`
 and phi as `(sum(lengths), phi_channels)`, concatenated in trajectory order.
 Offsets are derived from `trajectory_lengths.npy`; no padding or object arrays
@@ -126,6 +153,30 @@ commands without starting training. Optional environment variables include
 `TRAINING_DATA_ROOT`, `PYTHON_BIN`, `RUN_ROOT`, `EPOCHS`, `LATENT_DIM`,
 `PWL_UNITS`, `BATCH_SIZE`, `BATCHES_PER_EPOCH`, `SEQUENCE_LENGTH`, `CPU_THREADS`
 and `SEED`.
+
+For the balanced Combined-Dadras experiment, use the current main trainer via:
+
+```bash
+bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0
+```
+
+This wrapper enables `--mixed-balanced-sampling` with ten time sections and
+uses the current settings from `run_dadras_combined_cphi.sh`: 300 latent
+dimensions, 150 PWL units, 1,000 epochs, batch size 80 and 100 batches per epoch,
+with the final training state saved. It uses the same data root above and
+trains the three parameter ranges sequentially on the chosen GPU. Models and
+logs go under
+`alrnn_python/runs/term_ablations/dadras/combined_dadras_balanced_cphi/<run_id>/`.
+Activate the Python environment first. Update this repository on the server;
+the generator folder and regenerated datasets are not required.
+
+```bash
+DRY_RUN=1 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0
+TIME_SAMPLING_BINS=20 EPOCHS=500 bash alrnn_python/run_dadras_combined_balanced_cphi.sh 0
+```
+
+The original runner also accepts `MIXED_BALANCED_SAMPLING=1` and
+`TIME_SAMPLING_BINS=10`; its default remains the original length-weighted sampler.
 
 ## Example Models and Evaluation
 Trained example models are provided in [ALRNN_models](alrnn_python/models/). They can be evaluated using a simple evaluation provided in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The linear subregion analysis functions are provided in the &rarr; [`linear_region_functions`](alrnn_python/linear_region_functions.py) file. To calculate the dynamical system reconstruction quality, the state space distance $D_{stsp}$ and Hellinger dinstance $D_H$ can be calculated to evalute the geometrical and temoral agreement. These functions are provided in &rarr; [`performance measures`](alrnn_python/metrics.py).

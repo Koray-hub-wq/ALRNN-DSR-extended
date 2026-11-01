@@ -27,6 +27,14 @@ def parse_args(argv=None):
         help="Mixed datasets: weight trajectory selection by training length (default), or select trajectories uniformly.",
     )
     parser.add_argument(
+        "--mixed-balanced-sampling", action="store_true",
+        help="Mixed datasets: balance constant parameter values per batch and cycle shuffled time sections in each dynamic trajectory. Preserve the base mixture and within-value trajectory weighting.",
+    )
+    parser.add_argument(
+        "--time-sampling-bins", type=int, default=10,
+        help="Number of time sections per dynamic training trajectory with --mixed-balanced-sampling (default: 10).",
+    )
+    parser.add_argument(
         "--use-phi",
         action="store_true",
         help="Legacy shorthand for --phi-terms additive. Explicit --phi-terms takes precedence.",
@@ -41,7 +49,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--no-balanced-phi",
         action="store_true",
-        help="Disable balanced per-phi sampling for multi-trajectory data.",
+        help="Legacy fixed-length datasets: disable balanced per-phi sampling. Mixed datasets use --mixed-balanced-sampling.",
     )
     parser.add_argument(
         "--train-phi-values",
@@ -97,6 +105,10 @@ def parse_args(argv=None):
         parser.error("--t-transient must be nonnegative")
     if args.t_gen < 2:
         parser.error("--t-gen must be at least 2")
+    if args.time_sampling_bins < 1:
+        parser.error("--time-sampling-bins must be positive")
+    if args.mixed_balanced_sampling and args.no_balanced_phi:
+        parser.error("--no-balanced-phi is a legacy option and cannot be combined with --mixed-balanced-sampling")
     try:
         args.phi_terms = list(resolve_phi_terms(args.phi_terms, args.use_phi))
     except ValueError as error:
@@ -433,6 +445,8 @@ def main():
     mixed_data = (data_dir / "trajectory_lengths.npy").exists()
     if mixed_data and not args.multi_trajectory:
         raise ValueError("Mixed datasets require --multi-trajectory to respect all saved trajectory lengths")
+    if args.mixed_balanced_sampling and not mixed_data:
+        raise ValueError("--mixed-balanced-sampling requires a mixed dataset with saved trajectory lengths")
     if (data_dir / ".compact_in_progress.json").exists():
         raise ValueError("Dataset conversion is incomplete; rerun compact_mixed_datasets.py first")
     trajectories = np.load(data_dir / "trajectories.npy").astype(np.float32, copy=False)
@@ -451,6 +465,12 @@ def main():
     if mixed_data:
         if args.train_phi_values is not None:
             raise ValueError("--train-phi-values selects constant trajectories and is not supported for mixed datasets")
+        # Parameter balancing also works for vanilla models; sampling phi is
+        # independent of whether phi is supplied as an input to the model.
+        sampling_phi = all_phi
+        if args.mixed_balanced_sampling and sampling_phi is None:
+            sampling_phi = np.load(data_dir / "trajectory_phi.npy").astype(np.float32, copy=False)
+        modes_path = data_dir / "trajectory_modes.npy"
         dataset = MixedTrajectoryDataset(
             trajectories,
             lengths=np.load(data_dir / "trajectory_lengths.npy"),
@@ -460,12 +480,19 @@ def main():
             sequence_length=args.sequence_length,
             batch_size=args.batch_size,
             trajectory_sampling=args.trajectory_sampling,
+            balanced_sampling=args.mixed_balanced_sampling,
+            time_sampling_bins=args.time_sampling_bins,
+            sampling_parameters=sampling_phi,
+            trajectory_modes=np.load(modes_path, allow_pickle=False) if modes_path.exists() else None,
         )
         T_train = int(dataset.train_lengths.max())
         T_test = int(dataset.test_lengths.max())
         N = trajectories.shape[-1]
         phi_dim = 0 if all_phi is None else all_phi.shape[-1]
         print("Mixed multi-trajectory mode; sampling:", dataset.sampling_strategy)
+        if args.mixed_balanced_sampling:
+            print("Balanced constant phi values:", dataset.constant_phi_values.tolist())
+            print("Dynamic time sections per trajectory (at most):", args.time_sampling_bins)
         print("Training lengths:", dataset.train_lengths.tolist())
         print("Test lengths:", dataset.test_lengths.tolist())
         print("Evaluation groups:", dataset.eval_group_names)
@@ -703,6 +730,7 @@ def main():
                         "trajectory_test_lengths": dataset.test_lengths.tolist(),
                         "sampling": dataset.sampling_strategy,
                         "trajectory_sampling_probabilities": dataset.trajectory_probabilities.tolist(),
+                        "mixed_sampling": dataset.sampling_metadata(),
                     } if mixed_data else {}),
                     "N": int(N),
                     "phi_dim": int(phi_dim),
