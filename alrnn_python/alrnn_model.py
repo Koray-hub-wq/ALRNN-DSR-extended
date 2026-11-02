@@ -27,6 +27,15 @@ class ALRNNRecurrence(nn.Module):
             raise ValueError("Active phi terms require phi_dim > 0.")
         self.phi_dim = int(phi_dim) if self.phi_terms else 0
 
+    def set_phi_reference(self, reference=None):
+        if reference is None:
+            value = None
+        else:
+            value = torch.as_tensor(reference, dtype=self.A.dtype, device=self.A.device).reshape(-1)
+            if self.phi_terms != ("additive",) or value.shape != (self.phi_dim,) or not torch.isfinite(value).all():
+                raise ValueError("A phi reference requires an additive-only model and one finite value per phi dimension")
+        self.register_buffer("phi_reference", value)
+
     def forward(self, z, phi_t=None):
         if z.ndim != 2 or z.shape[1] != self.M:
             raise ValueError(f"Expected z with shape (batch, {self.M}), got {tuple(z.shape)}")
@@ -34,6 +43,8 @@ class ALRNNRecurrence(nn.Module):
             if phi_t is None or phi_t.ndim != 2 or phi_t.shape != (z.shape[0], self.phi_dim):
                 shape = None if phi_t is None else tuple(phi_t.shape)
                 raise ValueError(f"Expected phi_t with shape ({z.shape[0]}, {self.phi_dim}), got {shape}")
+            if self.phi_reference is not None:
+                phi_t = phi_t - self.phi_reference
         activated = self.activate(z)
         out = self.A * z + activated @ self.W.t() + self.h
         for name in self.phi_terms:
@@ -45,8 +56,11 @@ class ALRNNRecurrence(nn.Module):
         return out
 
     def model_config(self):
-        return dict(schema_version=1, model="AL_RNN", latent_dim=self.M, pwl_units=self.P,
-                    observed_dim=self.N, phi_dim=self.phi_dim, phi_terms=list(self.phi_terms))
+        config = dict(schema_version=1, model="AL_RNN", latent_dim=self.M, pwl_units=self.P,
+                      observed_dim=self.N, phi_dim=self.phi_dim, phi_terms=list(self.phi_terms))
+        if self.phi_reference is not None:
+            config["phi_reference"] = self.phi_reference.detach().cpu().tolist()
+        return config
 
 
 class AL_RNN(ALRNNRecurrence):
@@ -64,6 +78,7 @@ class AL_RNN(ALRNNRecurrence):
                     tensor = torch.randn(*shape) * weight.init_std if weight.init_std else torch.zeros(shape)
                     value = nn.Parameter(tensor)
                 self.register_parameter(weight.name, value)
+        self.set_phi_reference()
 
     def initialize_AWh_random(self):
         A = nn.Parameter(torch.diagonal(self.normalized_positive_definite(self.M), 0))
@@ -91,7 +106,7 @@ class SavedALRNN(ALRNNRecurrence):
         super().__init__()
         required = {"A", "W", "h", "B"}
         term_keys = {weight.name for term in PARAMETER_TERMS.values() for weight in term.weights}
-        if not required <= set(state) or set(state) - required - term_keys:
+        if not required <= set(state) or set(state) - required - term_keys - {"phi_reference"}:
             raise ValueError(f"Unexpected single AL-RNN state_dict keys: {sorted(state)}")
         terms = []
         for name, term in PARAMETER_TERMS.items():
@@ -124,6 +139,7 @@ class SavedALRNN(ALRNNRecurrence):
             if name not in terms:
                 for weight in term.weights:
                     self.register_buffer(weight.name, None)
+        self.set_phi_reference(state.get("phi_reference"))
 
 
 def load_saved_model(run_dir, device="cpu"):

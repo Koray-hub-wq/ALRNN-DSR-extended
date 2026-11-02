@@ -1,5 +1,6 @@
 import argparse
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -91,6 +92,10 @@ def parse_args(argv=None):
     )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
+        "--frozen-base-run", type=str,
+        help="Experimental: initialize A/W/h/B from a vanilla run trained at one phi, freeze them, and train only a new C on phi minus the base reference.",
+    )
+    parser.add_argument(
         "--eval-only",
         action="store_true",
         help="Skip training and evaluate output-dir/model.pt.",
@@ -114,6 +119,10 @@ def parse_args(argv=None):
     except ValueError as error:
         parser.error(str(error))
     args.use_phi = bool(args.phi_terms)
+    if args.frozen_base_run and args.phi_terms != ["additive"]:
+        parser.error("--frozen-base-run requires --phi-terms additive, without other terms")
+    if args.frozen_base_run and args.eval_only:
+        parser.error("Use --eval-only without --frozen-base-run to evaluate an adapted checkpoint")
     return args
 
 
@@ -145,7 +154,7 @@ import torch
 import torch.nn as nn
 from tqdm import trange
 
-from alrnn_model import AL_RNN
+from alrnn_model import AL_RNN, load_saved_model
 from metrics import power_spectrum_error, state_space_divergence_binning
 from mixed_trajectory_dataset import MixedTrajectoryDataset
 
@@ -421,6 +430,48 @@ def train_sh(
     }
 
 
+def initialize_frozen_cphi(model, base_run):
+    base, metrics, checkpoint = load_saved_model(base_run, device=model.A.device)
+    if base.phi_terms or base.phi_dim:
+        raise ValueError("The frozen base must be a vanilla AL-RNN without external input terms")
+    if model.phi_terms != ("additive",) or model.phi_dim != 1:
+        raise ValueError("Frozen-Cphi training requires an additive-only model with scalar phi")
+    if (base.M, base.P, base.N) != (model.M, model.P, model.N):
+        raise ValueError("Base and adaptation models must have identical latent, PWL, and observed dimensions")
+    phi_values = metrics.get("args", {}).get("train_phi_values")
+    if phi_values is None or len(phi_values) != 1 or not np.isfinite(phi_values[0]):
+        raise ValueError("Base metrics must record exactly one finite --train-phi-values reference")
+    with torch.no_grad():
+        for name in ("A", "W", "h", "B"):
+            getattr(model, name).copy_(getattr(base, name))
+        model.C.zero_()
+    model.set_phi_reference(phi_values)
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_(name == "C")
+    digest = hashlib.sha256()
+    with checkpoint.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "base_run": str(Path(base_run).resolve()),
+        "base_checkpoint": str(checkpoint.resolve()),
+        "base_checkpoint_sha256": digest.hexdigest(),
+        "reference_phi": float(phi_values[0]),
+        "input_term": "C @ (phi - reference_phi)",
+        "trainable_parameter_names": ["C"],
+        "frozen_parameter_names": ["A", "W", "h", "B"],
+    }
+
+
+def verify_frozen_weights(model, transfer):
+    base_state = torch.load(transfer["base_checkpoint"], map_location="cpu", weights_only=True)
+    unchanged = all(torch.equal(getattr(model, name).detach().cpu(), base_state[name])
+                    for name in transfer["frozen_parameter_names"])
+    if not unchanged:
+        raise RuntimeError("Frozen base weights changed during Cphi adaptation")
+    transfer["frozen_weights_unchanged"] = True
+
+
 def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -443,6 +494,8 @@ def main():
 
     data_dir = Path(args.data_dir)
     mixed_data = (data_dir / "trajectory_lengths.npy").exists()
+    if args.frozen_base_run and (mixed_data or not args.multi_trajectory):
+        raise ValueError("Frozen-Cphi adaptation currently requires legacy fixed-parameter multi-trajectory data")
     if mixed_data and not args.multi_trajectory:
         raise ValueError("Mixed datasets require --multi-trajectory to respect all saved trajectory lengths")
     if args.mixed_balanced_sampling and not mixed_data:
@@ -554,12 +607,28 @@ def main():
         device
     )
     model_path = output_dir / "model.pt"
+    if args.frozen_base_run and Path(args.frozen_base_run).resolve() == output_dir.resolve():
+        raise ValueError("Adaptation output must not overwrite the base run")
+    transfer = initialize_frozen_cphi(model, args.frozen_base_run) if args.frozen_base_run else None
+    if transfer:
+        print("Frozen base adaptation:", transfer)
     if args.eval_only:
         print("Eval-only mode: loading model from", model_path)
-        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        state = torch.load(model_path, map_location=device, weights_only=True)
+        model.set_phi_reference(state.get("phi_reference"))
+        model.load_state_dict(state)
+        saved_metrics_path = output_dir / "metrics.json"
+        if saved_metrics_path.is_file():
+            saved_metrics = json.loads(saved_metrics_path.read_text(encoding="utf-8-sig"))
+            transfer = saved_metrics.get("frozen_cphi_transfer")
+            if transfer:
+                for name, parameter in model.named_parameters():
+                    parameter.requires_grad_(name == "C")
         metrics = {"losses": [], "dstsp": [], "dh": []}
     else:
-        optimizer = torch.optim.RAdam(model.parameters(), lr=args.start_lr)
+        optimizer = torch.optim.RAdam(
+            [parameter for parameter in model.parameters() if parameter.requires_grad], lr=args.start_lr
+        )
         scheduler = torch.optim.lr_scheduler.ExponentialLR(
             optimizer, gamma=np.exp(np.log(args.end_lr / args.start_lr) / args.epochs)
         )
@@ -580,6 +649,8 @@ def main():
             use_best_model=args.use_best_model,
         )
 
+        if transfer:
+            verify_frozen_weights(model, transfer)
         torch.save(model.state_dict(), model_path)
 
     def evaluate_test_trajectory(x_test_tensor, phi_test_tensor, label, file_stem):
@@ -735,6 +806,7 @@ def main():
                     "N": int(N),
                     "phi_dim": int(phi_dim),
                     "model_config": model.model_config(),
+                    "frozen_cphi_transfer": transfer,
                     "parameter_counts": {
                         "total": sum(parameter.numel() for parameter in model.parameters()),
                         "trainable": sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad),
