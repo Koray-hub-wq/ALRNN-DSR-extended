@@ -67,7 +67,12 @@ class ProvenanceTests(unittest.TestCase):
 
     def write(self, backend):
         backend.write_plots(output=self.output, labels=["Cphi"], components=["z"])
-        return json.loads(self.output.with_suffix(".sources.json").read_text())
+        return self.provenance(self.output)
+
+    def provenance(self, plot):
+        manifest = json.loads((plot.parent / "bifurcation_sources.json").read_text())
+        detail = manifest["plots"][str(plot.resolve())]
+        return {**manifest["analyses"][detail["analysis_id"]], **detail}
 
     def test_fresh_computation_records_paths_hash_labels_and_plot_membership(self):
         backend = self.backend()
@@ -82,10 +87,61 @@ class ProvenanceTests(unittest.TestCase):
         self.assertFalse(result["cache"]["reused"])
         self.assertTrue(backend.cache_matches(self.cache, self.metadata))
         self.assertEqual(result["plot_model_indices"], [0])
-        truth = json.loads((self.root / "truth.sources.json").read_text())
+        truth = self.provenance(self.root / "truth.png")
         self.assertEqual(truth["plot_model_indices"], [])
-        single = json.loads((self.root / "model.sources.json").read_text())
+        single = self.provenance(self.root / "model.png")
         self.assertEqual(single["plot_model_indices"], [0])
+        self.assertEqual([path.name for path in self.root.glob("*.json")], ["bifurcation_sources.json"])
+        self.assertFalse(list(self.root.glob("*.sources.json")))
+        manifest = json.loads((self.root / "bifurcation_sources.json").read_text())
+        self.assertEqual(len(manifest["analyses"]), 1)
+        self.assertEqual(len(manifest["plots"]), 3)
+        self.assertFalse((self.root / "bifurcation_sources.json.tmp").exists())
+
+    def test_other_comparisons_in_the_folder_keep_their_original_checkpoint_identity(self):
+        backend = self.backend()
+        backend.load_alrnn_model(self.run, "cpu")
+        backend.save_points_cache(self.cache, self.metadata)
+        first = self.write(backend)
+        first_plot = self.output
+        self.checkpoint.write_bytes(b"new weights")
+        self.output = self.root / "second.png"
+        self.cache = self.root / "second_cache.npz"
+        self.settings.output = self.output
+        self.settings.cache = self.cache
+        newer = self.backend()
+        newer.load_alrnn_model(self.run, "cpu")
+        newer.save_points_cache(self.cache, self.metadata)
+        second = self.write(newer)
+        manifest = json.loads((self.root / "bifurcation_sources.json").read_text())
+        self.assertEqual(len(manifest["analyses"]), 2)
+        self.assertEqual(len(manifest["plots"]), 4)
+        self.assertEqual(self.provenance(first_plot)["models"][0]["checkpoint_sha256"],
+                         first["models"][0]["checkpoint_sha256"])
+        self.assertNotEqual(first["models"][0]["checkpoint_sha256"], second["models"][0]["checkpoint_sha256"])
+        self.assertEqual(self.provenance(self.root / "model.png")["models"][0]["checkpoint_sha256"],
+                         second["models"][0]["checkpoint_sha256"])
+        self.assertEqual(len(list(self.root.glob("*.json"))), 1)
+
+    def test_replotting_all_images_replaces_records_instead_of_accumulating_stale_analyses(self):
+        first = self.backend()
+        first.load_alrnn_model(self.run, "cpu")
+        first.save_points_cache(self.cache, self.metadata)
+        self.write(first)
+        second = self.backend()
+        second.load_points_cache(self.cache)
+        self.write(second)
+        manifest = json.loads((self.root / "bifurcation_sources.json").read_text())
+        self.assertEqual(len(manifest["analyses"]), 1)
+        self.assertEqual(len(manifest["plots"]), 3)
+
+    def test_unrecognized_folder_manifest_is_never_overwritten(self):
+        np.savez(self.cache, metadata=np.array(json.dumps(self.metadata)))
+        path = self.root / "bifurcation_sources.json"
+        path.write_text('{"schema_version": 999}')
+        with self.assertRaisesRegex(ValueError, "Unrecognized"):
+            self.write(self.backend())
+        self.assertEqual(path.read_text(), '{"schema_version": 999}')
 
     def test_cached_plot_keeps_original_checkpoint_identity(self):
         backend = self.backend()

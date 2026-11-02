@@ -183,6 +183,12 @@ saved global training normalization and shade the actual training parameter
 ranges. The default sweep is raw Dadras e = 4.9 to 6.2, 320 parameter values,
 component z; the simulation dt is read from the datasets. The existing plotting
 backend also writes the individual model diagrams, caches and provenance files.
+All images in an output folder now share one `bifurcation_sources.json`, rather
+than one JSON per image. Its `plots` mapping records each image's component,
+model indices and analysis ID; `analyses` contains checkpoint hashes, model
+settings, normalization, cache identity and commands. Additional comparisons
+in the same folder are merged, and replotting an image updates only its mapping.
+Old per-image `.sources.json` files are not created by the updated wrapper.
 Results go under
 `alrnn_python/bifurcation_diagrams/term_ablations/dadras/combined_dadras_balanced/<run_id>/<variant>/`.
 A failed training skips its own variant's comparison; the other variant can
@@ -213,6 +219,36 @@ Plot settings use `BIFURCATION_PARAMETER_MIN`, `BIFURCATION_PARAMETER_MAX`,
 
 The original runner also accepts `MIXED_BALANCED_SAMPLING=1` and
 `TIME_SAMPLING_BINS=10`; its default remains the original length-weighted sampler.
+
+The same mixed-data experiment is available for Rossler and TSUCS1, using
+separate launchers with the same two models, balancing, b-tipping venv, GPU queue
+and two bifurcation comparisons:
+
+```bash
+bash alrnn_python/run_rossler_combined_balanced_cphi.sh 0 1 2 3 4 5
+bash alrnn_python/run_tsucs1_combined_balanced_cphi.sh 0 1 2 3 4 5
+```
+
+Use one to six GPUs per launcher. If both systems run at the same time, assign
+disjoint GPU IDs, for example `0 1 2` for Rossler and `3 4 5` for TSUCS1.
+`run_mixed_combined_balanced.sh` contains the shared environment and argument
+setup; the existing Python runner selects the experiment with `--system`
+(default `dadras`, so existing Dadras commands still work).
+
+| System | Three raw training intervals | Default server data directory |
+| --- | --- | --- |
+| Rossler a | [0.05, 0.14], [0.05, 0.35], [0.17, 0.35] | `/export/home/klenkeit/training_data/mixed_parameter_trajectories/rossler/combined_rossler` |
+| TSUCS1 e | [20, 24.5], [20, 23], [23.6, 24.5] | `/export/home/klenkeit/training_data/mixed_parameter_trajectories/tsucs1/combined_tsucs1` |
+
+Override `TRAINING_DATA_ROOT` if the uploaded dataset folders are elsewhere.
+Default bifurcation sweeps cover the full respective interval (Rossler
+0.05--0.35, TSUCS1 20--24.5). Models and plots use separate
+`term_ablations/<system>/combined_<system>_balanced/<run_id>/` folders.
+The local generator presets are `batch_config_combined_rossler.json` and
+`batch_config_combined_tsucs1.json` in
+`generate_trainingdata/mixed_parameter_trajectories`; the generator directory
+is not needed on the server for training. Upload the compact datasets and the
+updated ALRNN repository, including the shared launcher.
 
 ## Example Models and Evaluation
 Trained example models are provided in [ALRNN_models](alrnn_python/models/). They can be evaluated using a simple evaluation provided in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The linear subregion analysis functions are provided in the &rarr; [`linear_region_functions`](alrnn_python/linear_region_functions.py) file. To calculate the dynamical system reconstruction quality, the state space distance $D_{stsp}$ and Hellinger dinstance $D_H$ can be calculated to evalute the geometrical and temoral agreement. These functions are provided in &rarr; [`performance measures`](alrnn_python/metrics.py).

@@ -1,4 +1,8 @@
-"""Queue six balanced mixed-Dadras trainings and two bifurcation comparisons."""
+"""Queue six balanced mixed-data trainings and two bifurcation comparisons.
+
+Dadras remains the default for existing launchers; --system also selects the
+equivalent Rossler or TSUCS1 experiment.
+"""
 
 import argparse
 from dataclasses import asdict, dataclass
@@ -21,6 +25,25 @@ DATASETS = {
     "dadras_e_5p2_to_5p7": "e in [5.2, 5.7]",
     "dadras_e_5p2_to_6p2": "e in [5.2, 6.2]",
 }
+EXPERIMENTS = {
+    "dadras": {"regime": REGIME, "datasets": DATASETS, "sweep": (4.9, 6.2)},
+    "rossler": {
+        "regime": "rossler_a_005_to_035", "sweep": (0.05, 0.35),
+        "datasets": {
+            "rossler_a_0p05_to_0p14": "a in [0.05, 0.14]",
+            "rossler_a_0p05_to_0p35": "a in [0.05, 0.35]",
+            "rossler_a_0p17_to_0p35": "a in [0.17, 0.35]",
+        },
+    },
+    "tsucs1": {
+        "regime": "tsucs1_e_20_to_245", "sweep": (20.0, 24.5),
+        "datasets": {
+            "tsucs1_e_20_to_24p5": "e in [20, 24.5]",
+            "tsucs1_e_20_to_23": "e in [20, 23]",
+            "tsucs1_e_23p6_to_24p5": "e in [23.6, 24.5]",
+        },
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -33,6 +56,7 @@ class Variant:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--system", choices=tuple(EXPERIMENTS), default="dadras")
     parser.add_argument("--training-data-root", type=Path, required=True)
     parser.add_argument("--backend-script", type=Path, required=True)
     parser.add_argument("--gpu-ids", type=int, nargs="+", default=[0])
@@ -47,14 +71,19 @@ def parse_args(argv=None):
     parser.add_argument("--time-sampling-bins", type=int, default=10)
     parser.add_argument("--cpu-threads", type=int, default=4)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--parameter-min", type=float, default=4.9)
-    parser.add_argument("--parameter-max", type=float, default=6.2)
+    parser.add_argument("--parameter-min", type=float)
+    parser.add_argument("--parameter-max", type=float)
     parser.add_argument("--num-parameters", type=int, default=320)
     parser.add_argument("--components", nargs="+", choices=("x", "y", "z"), default=["z"])
     parser.add_argument("--run-root", type=Path)
     parser.add_argument("--plot-root", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    sweep = EXPERIMENTS[args.system]["sweep"]
+    if args.parameter_min is None:
+        args.parameter_min = sweep[0]
+    if args.parameter_max is None:
+        args.parameter_max = sweep[1]
     validate_gpu_ids(args.gpu_ids, max_gpus=MAX_GPUS)
     for name in ("epochs", "batch_size", "batches_per_epoch", "sequence_length",
                  "time_sampling_bins", "cpu_threads", "num_parameters"):
@@ -92,7 +121,8 @@ def prepare_data(args, script_dir):
         if not path.is_file():
             raise FileNotFoundError(f"Missing required file: {path}")
     time_steps = []
-    for name in DATASETS:
+    experiment = EXPERIMENTS[args.system]
+    for name in experiment["datasets"]:
         folder = args.training_data_root / name
         if (folder / ".compact_in_progress.json").exists():
             raise ValueError(f"Dataset conversion is incomplete: {folder}")
@@ -104,8 +134,8 @@ def prepare_data(args, script_dir):
         metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8-sig"))
         if metadata.get("format") not in ("alrnn_mixed_parameter_trajectories_v1", "alrnn_mixed_parameter_trajectories_v2"):
             raise ValueError(f"Expected a completed mixed dataset: {folder}")
-        if metadata.get("config", {}).get("regime") != REGIME:
-            raise ValueError(f"Expected {REGIME}: {folder}")
+        if metadata.get("config", {}).get("regime") != experiment["regime"]:
+            raise ValueError(f"Expected {experiment['regime']}: {folder}")
         lengths = np.load(folder / "trajectory_train_lengths.npy", allow_pickle=False)
         if lengths.ndim != 1 or not lengths.size or np.any(lengths <= args.sequence_length):
             raise ValueError(f"Training prefixes must exceed --sequence-length: {folder}")
@@ -120,10 +150,11 @@ def prepare_data(args, script_dir):
     return time_steps[0]
 
 
-def job_definitions(model_variants):
+def job_definitions(model_variants, datasets=None):
+    datasets = DATASETS if datasets is None else datasets
     trainings = {
         f"{variant}__{dataset}": (variant, dataset)
-        for dataset in DATASETS for variant in model_variants
+        for dataset in datasets for variant in model_variants
     }
     comparisons = {f"{variant}__bifurcation": variant for variant in model_variants}
     return trainings, comparisons
@@ -143,18 +174,20 @@ def training_step(args, script_dir, run_root, variant_name, variant, dataset, gp
         "--gpu-id", str(gpu), "--cpu-threads", str(args.cpu_threads), "--no-best-model",
         "--output-dir", str(run_root / variant_name / dataset),
     ]
-    return Step(f"train {variant.label}: {DATASETS[dataset]}", command, script_dir)
+    return Step(f"train {variant.label}: {EXPERIMENTS[args.system]['datasets'][dataset]}", command, script_dir)
 
 
 def comparison_step(args, script_dir, run_root, plot_root, variant_name, variant, gpu, dt):
     output_dir = plot_root / variant_name
+    experiment = EXPERIMENTS[args.system]
+    datasets = experiment["datasets"]
     command = [
         sys.executable, "-u", str(script_dir / "compare_model_bifurcation_diagrams.py"),
         "--backend-script", str(args.backend_script), "--use-training-normalization",
-        "--model-type", "alrnn", "--regime", REGIME,
-        "--model-runs", *(str(run_root / variant_name / name) for name in DATASETS),
-        "--training-data-dirs", *(str(args.training_data_root / name) for name in DATASETS),
-        "--model-labels", *(f"{variant.label}: {label}" for label in DATASETS.values()),
+        "--model-type", "alrnn", "--regime", experiment["regime"],
+        "--model-runs", *(str(run_root / variant_name / name) for name in datasets),
+        "--training-data-dirs", *(str(args.training_data_root / name) for name in datasets),
+        "--model-labels", *(f"{variant.label}: {label}" for label in datasets.values()),
         "--parameter-min", str(args.parameter_min), "--parameter-max", str(args.parameter_max),
         "--num-parameters", str(args.num_parameters), "--components", *args.components,
         "--dt", str(dt),
@@ -189,9 +222,9 @@ def main(argv=None):
     args = parse_args(argv)
     script_dir = Path(__file__).resolve().parent
     model_variants = variants(args)
-    trainings, comparisons = job_definitions(model_variants)
+    trainings, comparisons = job_definitions(model_variants, EXPERIMENTS[args.system]["datasets"])
     run_id = f"{datetime.now():%Y%m%d_%H%M%S_%f}_{os.getpid()}"
-    family = Path("term_ablations/dadras/combined_dadras_balanced")
+    family = Path("term_ablations") / args.system / f"combined_{args.system}_balanced"
     run_root = args.run_root or script_dir / "runs" / family / run_id
     plot_root = args.plot_root or script_dir / "bifurcation_diagrams" / family / run_id
     dt = 0.01 if args.dry_run else prepare_data(args, script_dir)

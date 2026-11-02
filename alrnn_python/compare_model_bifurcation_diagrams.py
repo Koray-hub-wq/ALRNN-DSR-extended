@@ -4,6 +4,7 @@ All analysis options are passed through to the existing script. The backend can
 be selected with --backend-script. Constant training parameters retain their
 vertical lines; time-varying training parameters get a pale blue range.
 --use-training-normalization supports globally standardized mixed datasets.
+One bifurcation_sources.json per output folder records all plot/model mappings.
 """
 
 import argparse
@@ -217,7 +218,7 @@ def install_provenance(backend, backend_path, normalization="per_simulated_traje
                            "repo_root": settings.pretrained_repo_root,
                            "provenance_status": "pretrained_checkpoint_not_recorded"})
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "backend_script": str(Path(backend_path).resolve()),
             "command": list(sys.argv),
@@ -231,6 +232,7 @@ def install_provenance(backend, backend_path, normalization="per_simulated_traje
                       "metadata": metadata},
             "plots": [str(Path(path).resolve()) for path in written],
         }
+        by_folder = {}
         for path in written:
             path = Path(path)
             included = list(range(len(models)))
@@ -243,11 +245,37 @@ def install_provenance(backend, backend_path, normalization="per_simulated_traje
                     if path == backend.individual_output_path(kwargs["output"], component, label, count):
                         included = [] if index == 0 else [index - 1]
                         component_name = component
-            sidecar = path.with_suffix(".sources.json")
-            document = {**payload, "plot": str(path.resolve()),
-                        "component": component_name, "plot_model_indices": included}
-            sidecar.write_text(json.dumps(document, indent=2, default=json_value) + "\n", encoding="utf-8")
-            print(f"Saved model provenance: {sidecar.resolve()}", flush=True)
+            resolved = path.resolve()
+            by_folder.setdefault(resolved.parent, {})[str(resolved)] = {
+                "component": component_name, "plot_model_indices": included,
+            }
+        # Keep one manifest for a folder, including other comparisons/components
+        # already saved there. Every image points at its own analysis record, so
+        # replotting one image cannot relabel older images with newer weights.
+        identity = {key: value for key, value in payload.items() if key not in ("created_at_utc", "plots")}
+        analysis_id = hashlib.sha256(json.dumps(identity, sort_keys=True, default=json_value).encode("utf-8")).hexdigest()
+        for folder, details in by_folder.items():
+            manifest_path = folder / "bifurcation_sources.json"
+            if manifest_path.exists():
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+                if (manifest.get("schema_version") != 2 or not isinstance(manifest.get("analyses"), dict)
+                        or not isinstance(manifest.get("plots"), dict)):
+                    raise ValueError(f"Unrecognized bifurcation provenance manifest: {manifest_path}")
+            else:
+                manifest = {"schema_version": 2, "analyses": {}, "plots": {}}
+            manifest["updated_at_utc"] = payload["created_at_utc"]
+            manifest["analyses"][analysis_id] = dict(payload)
+            for plot, detail in details.items():
+                manifest["plots"][plot] = {**detail, "analysis_id": analysis_id}
+            active = {detail["analysis_id"] for detail in manifest["plots"].values()}
+            manifest["analyses"] = {key: value for key, value in manifest["analyses"].items() if key in active}
+            for key, analysis in manifest["analyses"].items():
+                analysis["plots"] = sorted(plot for plot, detail in manifest["plots"].items()
+                                           if detail["analysis_id"] == key)
+            temporary = manifest_path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(manifest, indent=2, default=json_value) + "\n", encoding="utf-8")
+            temporary.replace(manifest_path)
+            print(f"Saved model provenance for {len(manifest['plots'])} plots: {manifest_path}", flush=True)
         return written
 
     backend.save_points_cache = save_cache
