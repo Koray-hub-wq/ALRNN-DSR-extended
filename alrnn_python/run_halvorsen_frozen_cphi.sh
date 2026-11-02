@@ -18,7 +18,7 @@ if (( $# > 1 )) || [[ ! "$gpu_id" =~ ^[0-9]+$ ]]; then
 fi
 
 latent_dim="${LATENT_DIM:-200}"
-pwl_units="${PWL_UNITS:-100}"
+pwl_units="${PWL_UNITS:-20}"
 base_epochs="${BASE_EPOCHS:-1000}"
 cphi_epochs="${CPHI_EPOCHS:-1000}"
 seed="${SEED:-7}"
