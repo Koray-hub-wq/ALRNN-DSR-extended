@@ -1,0 +1,25 @@
+{
+  "regime": "halvorsen_a_chaotic_to_periodic",
+  "model_runs": [
+    "../runs/halvorsen_9params_train_m1_m0p75_m0p5_m200_p20_cphi"
+  ],
+  "model_labels": ["ALRNN Cphi (M=200, P=20)"],
+  "output_dir": "results/halvorsen_ensemble_linear_4000",
+  "n_trajectories": 200,
+  "steps": 4000,
+  "burn_in_steps": 5000,
+  "dt": 0.01,
+  "seed": 8,
+  "drift": "linear",
+  "parameter_start": 1.4,
+  "parameter_end": 2.09,
+  "normalization": "trajectory",
+  "plot_space": "physical",
+  "component": "z",
+  "peak_prominence": 0.0,
+  "peak_distance_steps": 1,
+  "max_simulation_attempts": 10,
+  "rollout_batch_size": 256,
+  "device": "cuda",
+  "cpu_threads": 4
+}
