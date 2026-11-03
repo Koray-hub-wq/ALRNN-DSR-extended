@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Shared launcher; use the Dadras, Rossler or TSUCS1 wrapper.
+# Shared launcher; use the wrapper for the desired regime.
 # Usage: bash run_mixed_combined_balanced.sh SYSTEM [GPU_ID ...]
 system="${1:-}"
 case "$system" in
   dadras) sweep_min=4.9; sweep_max=6.2 ;;
   rossler) sweep_min=0.05; sweep_max=0.35 ;;
   tsucs1) sweep_min=20.0; sweep_max=24.5 ;;
-  *) printf 'Usage: bash %s {dadras|rossler|tsucs1} [GPU_ID ...]\n' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+  lorenz_rho) sweep_min=1.0; sweep_max=30.0 ;;
+  rossler_c) sweep_min=3.0; sweep_max=6.0 ;;
+  *) printf 'Usage: bash %s {dadras|rossler|tsucs1|lorenz_rho|rossler_c} [GPU_ID ...]\n' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
 esac
 shift
 ROOT_DIR="${ROOT_DIR:-$HOME}"

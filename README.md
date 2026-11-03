@@ -250,6 +250,29 @@ The local generator presets are `batch_config_combined_rossler.json` and
 is not needed on the server for training. Upload the compact datasets and the
 updated ALRNN repository, including the shared launcher.
 
+The Lorenz-rho and Rossler-c experiments use **two datasets each**, hence four
+trainings and two bifurcation comparisons per launcher. They keep the same mixed
+trajectory recipe, balanced sampling, Cphi 300/150 and Cphi + shifted-ReLU 200/100
+models, b-tipping venv activation and GPU queue:
+
+```bash
+bash alrnn_python/run_lorenz_rho_combined_balanced_cphi.sh 0 1 2 3
+bash alrnn_python/run_rossler_c_combined_balanced_cphi.sh 0 1 2 3
+```
+
+| Regime | Raw training intervals | Default server data directory |
+| --- | --- | --- |
+| `lorenz_rho_1_to_30` | [5, 23], [1, 30] | `/export/home/klenkeit/training_data/mixed_parameter_trajectories/lorenz_rho/combined_lorenz_rho` |
+| `rossler_c_3_to_6` | [4.5, 5.5], [3, 6] | `/export/home/klenkeit/training_data/mixed_parameter_trajectories/rossler_c/combined_rossler_c` |
+
+Use fewer GPU IDs to queue the four trainings on fewer GPUs; use disjoint IDs
+when running both launchers concurrently. Local simulation presets are
+`batch_config_combined_lorenz_rho.json` and `batch_config_combined_rossler_c.json`
+in `generate_trainingdata/mixed_parameter_trajectories`. The default raw
+bifurcation sweeps cover [1, 30] and [3, 6], respectively. Output folders use
+the separate system keys `lorenz_rho` and `rossler_c`; each plot folder retains
+one shared `bifurcation_sources.json`.
+
 ## Example Models and Evaluation
 Trained example models are provided in [ALRNN_models](alrnn_python/models/). They can be evaluated using a simple evaluation provided in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The linear subregion analysis functions are provided in the &rarr; [`linear_region_functions`](alrnn_python/linear_region_functions.py) file. To calculate the dynamical system reconstruction quality, the state space distance $D_{stsp}$ and Hellinger dinstance $D_H$ can be calculated to evalute the geometrical and temoral agreement. These functions are provided in &rarr; [`performance measures`](alrnn_python/metrics.py).
 

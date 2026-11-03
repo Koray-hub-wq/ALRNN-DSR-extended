@@ -1,7 +1,7 @@
-"""Queue six balanced mixed-data trainings and two bifurcation comparisons.
+"""Queue balanced mixed-data trainings and two bifurcation comparisons.
 
 Dadras remains the default for existing launchers; --system also selects the
-equivalent Rossler or TSUCS1 experiment.
+equivalent Rossler, TSUCS1, Lorenz-rho or Rossler-c experiment.
 """
 
 import argparse
@@ -41,6 +41,20 @@ EXPERIMENTS = {
             "tsucs1_e_20_to_24p5": "e in [20, 24.5]",
             "tsucs1_e_20_to_23": "e in [20, 23]",
             "tsucs1_e_23p6_to_24p5": "e in [23.6, 24.5]",
+        },
+    },
+    "lorenz_rho": {
+        "regime": "lorenz_rho_1_to_30", "sweep": (1.0, 30.0),
+        "datasets": {
+            "lorenz_rho_5_to_23": "rho in [5, 23]",
+            "lorenz_rho_1_to_30": "rho in [1, 30]",
+        },
+    },
+    "rossler_c": {
+        "regime": "rossler_c_3_to_6", "sweep": (3.0, 6.0),
+        "datasets": {
+            "rossler_c_4p5_to_5p5": "c in [4.5, 5.5]",
+            "rossler_c_3_to_6": "c in [3, 6]",
         },
     },
 }
@@ -146,7 +160,7 @@ def prepare_data(args, script_dir):
         time_steps.append(dt)
         print(f"Dataset: {folder} | mean={scaling.mean} | std={scaling.std}", flush=True)
     if not np.allclose(time_steps, time_steps[0], atol=0, rtol=1e-12):
-        raise ValueError("Bifurcation comparisons require the same simulation dt for all three datasets")
+        raise ValueError("Bifurcation comparisons require the same simulation dt for all datasets")
     return time_steps[0]
 
 
@@ -237,7 +251,7 @@ def main(argv=None):
         return [comparison_step(args, script_dir, run_root, plot_root, variant, model_variants[variant], gpu, dt)]
 
     if args.dry_run:
-        print("DRY RUN: six trainings, then two bifurcation comparisons; no files or CUDA required.")
+        print(f"DRY RUN: {len(trainings)} trainings, then {len(comparisons)} bifurcation comparisons; no files or CUDA required.")
         print("GPU assignments below are illustrative; queued jobs start on the next available GPU.")
         for index, job in enumerate([*trainings, *comparisons]):
             gpu = args.gpu_ids[index % len(args.gpu_ids)]
@@ -292,7 +306,7 @@ def main(argv=None):
     if failed:
         print(f"Failed/skipped jobs: {', '.join(failed)}. See {log_dir}", flush=True)
         return 1
-    print(f"Finished six trainings and two bifurcation comparisons. Plots: {plot_root}", flush=True)
+    print(f"Finished {len(trainings)} trainings and {len(comparisons)} bifurcation comparisons. Plots: {plot_root}", flush=True)
     return 0
 
 
