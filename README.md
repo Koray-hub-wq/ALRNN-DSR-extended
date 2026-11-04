@@ -289,6 +289,21 @@ Set `DRY_RUN=1` to inspect the commands first. The Python entry point also accep
 `--training-data-root`, `--backend-script`, `--plot-root`, `--components`,
 `--num-parameters` and `--reuse-cache` for moved data or a cached sweep.
 
+For Lorenz diagrams based on **x maxima**, using the same existing run:
+
+```bash
+BIFURCATION_COMPONENTS=x REUSE_CACHE=1 bash alrnn_python/rerun_mixed_bifurcations.sh \
+  alrnn_python/runs/term_ablations/lorenz_rho/combined_lorenz_rho_balanced/EXISTING_RUN_ID 2 3
+```
+
+Completed sweeps cache maxima of all three components even when only z was
+plotted. `REUSE_CACHE=1` uses a matching cache, otherwise it computes the sweep.
+An explicit single component gets its own output name, e.g.
+`bifurcation_compare_x.png` and corresponding individual panels, preserving the
+earlier default z images. The original cache and the shared provenance manifest
+remain in the same variant folder. `BIFURCATION_COMPONENTS="x z"` generates both
+components; omitting the variable retains the saved plan's selection.
+
 The ALRNN bifurcation wrapper supplies missing `lorenz_rho_1_to_30` and
 `rossler_c_3_to_6` presets when an older external generator does not include them.
 It reuses the existing Lorenz/Rossler ODEs and exactly the simulation presets'

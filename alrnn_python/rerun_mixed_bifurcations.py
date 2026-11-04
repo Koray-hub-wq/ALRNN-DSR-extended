@@ -71,6 +71,13 @@ def main(argv=None):
     def steps(job, gpu):
         name = comparisons[job]
         step = runner.comparison_step(args, scripts, retry.run_root, plots, name, variants[name], gpu, dt)
+        if retry.components is not None and len(args.components) == 1:
+            # The external backend uses the unchanged output name for a single
+            # component. Give an explicit component its own name so a new x
+            # plot preserves the earlier default z plot and its provenance.
+            index = step.command.index("--output") + 1
+            output = Path(step.command[index])
+            step.command[index] = str(output.with_name(f"{output.stem}_{args.components[0]}{output.suffix}"))
         if retry.reuse_cache:
             step.command.remove("--force-recompute")
         return [step]

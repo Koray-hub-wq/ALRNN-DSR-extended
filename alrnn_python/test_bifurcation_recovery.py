@@ -102,6 +102,15 @@ class BifurcationRecoveryTests(unittest.TestCase):
         self.assertNotIn("--force-recompute", text)
         self.assertIn("--num-parameters 12 --components x z", text)
 
+    def test_x_only_uses_original_cache_and_separate_plot_names(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            recovery.main([*self.argv, "--dry-run", "--reuse-cache", "--components", "x"])
+        text = output.getvalue()
+        self.assertEqual(text.count("--components x"), 2)
+        self.assertEqual(text.count("bifurcation_compare_x.png"), 2)
+        self.assertEqual(text.count("bifurcation_cache.npz"), 2)
+        self.assertNotIn("--force-recompute", text)
+
     def test_missing_checkpoint_is_rejected_before_cuda_or_scheduling(self):
         with patch.object(runner, "prepare_data", return_value=.02), \
              patch.object(runner, "schedule", side_effect=AssertionError("must not schedule")):

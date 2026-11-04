@@ -17,6 +17,15 @@ extra_args=()
 if [[ -n "${BIFURCATION_DIR:-}" ]]; then
   extra_args+=(--backend-script "$BIFURCATION_DIR/compare_model_bifurcation_diagrams.py")
 fi
+if [[ -n "${BIFURCATION_COMPONENTS:-}" ]]; then
+  read -r -a components <<< "$BIFURCATION_COMPONENTS"
+  extra_args+=(--components "${components[@]}")
+fi
+case "${REUSE_CACHE:-0}" in
+  0) ;;
+  1) extra_args+=(--reuse-cache) ;;
+  *) printf 'REUSE_CACHE must be 0 or 1.\n' >&2; exit 2 ;;
+esac
 case "${DRY_RUN:-0}" in
   0) ;;
   1) extra_args+=(--dry-run) ;;
