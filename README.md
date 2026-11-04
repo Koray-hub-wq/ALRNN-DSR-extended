@@ -273,6 +273,28 @@ bifurcation sweeps cover [1, 30] and [3, 6], respectively. Output folders use
 the separate system keys `lorenz_rho` and `rossler_c`; each plot folder retains
 one shared `bifurcation_sources.json`.
 
+If bifurcation jobs failed after training, retry them without retraining:
+
+```bash
+bash alrnn_python/rerun_mixed_bifurcations.sh \
+  alrnn_python/runs/term_ablations/lorenz_rho/combined_lorenz_rho_balanced/EXISTING_RUN_ID 4 5
+```
+
+The retry reads the existing `plan.json`, uses its trained checkpoints and plot
+settings, and creates separate retry logs under the original run's `logs/`.
+Original training files, logs and summary remain unchanged. GPU IDs apply only to
+the retry; its separate GPU list is stored in that retry log folder. The same
+command works for the other mixed systems by passing their existing run folder.
+Set `DRY_RUN=1` to inspect the commands first. The Python entry point also accepts
+`--training-data-root`, `--backend-script`, `--plot-root`, `--components`,
+`--num-parameters` and `--reuse-cache` for moved data or a cached sweep.
+
+The ALRNN bifurcation wrapper supplies missing `lorenz_rho_1_to_30` and
+`rossler_c_3_to_6` presets when an older external generator does not include them.
+It reuses the existing Lorenz/Rossler ODEs and exactly the simulation presets'
+parameters, phi references and initial distributions. Existing external regime
+definitions are preserved; no external files need to be edited.
+
 ## Example Models and Evaluation
 Trained example models are provided in [ALRNN_models](alrnn_python/models/). They can be evaluated using a simple evaluation provided in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The linear subregion analysis functions are provided in the &rarr; [`linear_region_functions`](alrnn_python/linear_region_functions.py) file. To calculate the dynamical system reconstruction quality, the state space distance $D_{stsp}$ and Hellinger dinstance $D_H$ can be calculated to evalute the geometrical and temoral agreement. These functions are provided in &rarr; [`performance measures`](alrnn_python/metrics.py).
 

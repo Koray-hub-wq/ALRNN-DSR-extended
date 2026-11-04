@@ -295,6 +295,34 @@ def find_backend(explicit=None):
     raise FileNotFoundError("Pass --backend-script /path/to/diffrentbutconst_prams/compare_model_bifurcation_diagrams.py")
 
 
+def install_additional_regimes(backend):
+    """Supply newer presets when the server's external generator is older.
+
+    The Lorenz and Rossler ODEs already exist in that generator. Only missing
+    presets are added; installed definitions are never replaced.
+    """
+    original = backend.default_regimes
+    names = {regime.name for regime in original()}
+    definitions = [
+        dict(name="lorenz_rho_1_to_30", family="Lorenz", parameter="rho",
+             boundary=24.74, start=1.0, end=30.0, transition_type="fixed_point_to_chaotic",
+             description="Lorenz rho sweep from 1 to 30 with fixed sigma=10, beta=8/3 and transition reference at rho=24.74.",
+             rhs_key="lorenz", params={"sigma": 10., "beta": 8. / 3.},
+             init_center=(1., 1., 1.), init_scale=(.2, .2, .2)),
+        dict(name="rossler_c_3_to_6", family="Rossler", parameter="c",
+             boundary=4.3, start=3., end=6., transition_type="periodic_to_chaotic",
+             description="Rossler c sweep from 3 to 6 with fixed a=b=0.2 and transition reference at c=4.3.",
+             rhs_key="rossler", params={"a": .2, "b": .2},
+             init_center=(0., -5., .5), init_scale=(1., 1., .2)),
+    ]
+    missing = [backend.Regime(**values) for values in definitions if values["name"] not in names]
+    for regime in missing:
+        if regime.rhs_key not in backend.RHS:
+            raise ValueError(f"External bifurcation backend is missing ODE {regime.rhs_key!r}; update its generator.")
+    if missing:
+        backend.default_regimes = lambda: [*original(), *missing]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--backend-script", type=Path)
@@ -306,6 +334,7 @@ def main(argv=None):
     backend = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = backend
     spec.loader.exec_module(backend)
+    install_additional_regimes(backend)
     backend.load_alrnn_model = load_saved_model
     install_training_markers(backend)
     original_argv = sys.argv
