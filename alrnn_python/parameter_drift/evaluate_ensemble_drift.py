@@ -35,7 +35,7 @@ CACHE_VERSION = 1
 SIMULATION_KEYS = tuple(single.DEFAULTS) + (
     "parameter_start", "parameter_end", "phi_start", "phi_end", "initial_state",
 )
-PATH_KEYS = ("output_dir", "regime_file", "normalization_stats", "ground_truth", "plotly_js")
+PATH_KEYS = ("output_dir", "regime_file", "normalization_stats", "ground_truth", "plotly_js", "training_data_dir")
 
 
 def parse_args(argv=None):
@@ -99,6 +99,11 @@ def parse_args(argv=None):
         args.output_dir = SCRIPT_DIR / "results/ensemble_drift"
     if args.ground_truth is None:
         args.ground_truth = args.output_dir / "ground_truth.npz"
+    if args.training_data_dir is not None:
+        if args.normalization != "fixed":
+            parser.error("--training-data-dir requires --normalization fixed")
+        if args.normalization_stats is None:
+            args.normalization_stats = args.output_dir / "training_scaling.npz"
     if args.ground_truth.suffix != ".npz":
         parser.error("--ground-truth must be an .npz file")
     if args.regime is None:
@@ -136,12 +141,56 @@ def simulation_spec(args, regime):
 
 
 def cache_request(args, regime, regime_path):
-    return dict(
+    requested = dict(
         simulation=simulation_spec(args, regime), n_trajectories=args.n_trajectories,
         max_simulation_attempts=args.max_simulation_attempts,
         regime_definition=asdict(regime), regime_file_sha256=single.file_hash(regime_path),
         normalization_stats_sha256=single.file_hash(args.normalization_stats) if args.normalization_stats else None,
     )
+    if getattr(args, "training_scaling_source", None) is not None:
+        requested["training_scaling_source"] = args.training_scaling_source
+    return requested
+
+
+def prepare_training_scaling(args, regime):
+    """Snapshot the global training coordinates without changing training data."""
+    if args.training_data_dir is None:
+        return
+    path = args.normalization_stats
+    if args.plot_only:
+        # Replotting needs only the archived calibration, not the training data.
+        _, source = load_npz(path)
+        single.load_scaling(path)
+        if source.get("kind") != "global_training_coordinates" or source.get("training_data_dir") != str(args.training_data_dir):
+            raise ValueError(f"Training-scaling snapshot belongs to another dataset: {path}")
+    else:
+        from compare_model_bifurcation_diagrams import load_training_coordinates
+
+        data_dir = args.training_data_dir
+        metadata_path = data_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+        if metadata.get("config", {}).get("regime") != regime.name:
+            raise ValueError(f"Expected training regime {regime.name}: {data_dir}")
+        coordinates = load_training_coordinates(data_dir)
+        scale = max(abs(regime.start - regime.boundary), abs(regime.end - regime.boundary), 1e-8)
+        if not np.allclose([coordinates.phi_boundary, coordinates.phi_scale], [regime.boundary, scale], atol=1e-7, rtol=1e-7):
+            raise ValueError(f"Training phi reference disagrees with the drift regime: {data_dir}")
+        source = dict(kind="global_training_coordinates", training_data_dir=str(data_dir),
+                      regime=regime.name, phi_boundary=coordinates.phi_boundary, phi_scale=coordinates.phi_scale,
+                      metadata_sha256=single.file_hash(metadata_path),
+                      mean_sha256=single.file_hash(data_dir / "trajectory_mean.npy"),
+                      std_sha256=single.file_hash(data_dir / "trajectory_std.npy"))
+        arrays = dict(mean=coordinates.mean, std=coordinates.std)
+        same = False
+        if path.exists():
+            saved, saved_source = load_npz(path)
+            same = saved_source == source and all(np.array_equal(saved[key], value) for key, value in arrays.items())
+            if not same and not args.regenerate_ground_truth:
+                raise ValueError("Training scaling differs from the saved snapshot. Choose another output directory or use --regenerate-ground-truth.")
+        if not same:
+            save_npz(path, arrays, source)
+    args.training_scaling_source = source
+    print(f"Fixed global training scaling: {args.training_data_dir}", flush=True)
 
 
 def simulate_ensemble(module, regime, spec, n_trajectories, max_attempts=10, scaling_path=None, progress=True):
@@ -208,7 +257,9 @@ def ground_truth(args, module, regime, regime_path):
     metadata = dict(cache_version=CACHE_VERSION, kind="paired_drift_ensemble", request=requested,
                     regime_file=str(regime_path), failed_attempts=failures,
                     sample_convention="Index 0 is post burn-in. steps counts stored states, hence steps-1 model transitions. phi[t] drives x[t] -> x[t+1]; the ODE uses continuous drift.",
-                    normalization_note="trajectory uses one affine transform per full recorded truth trajectory, including its future; the same transform is used for its paired model. No time-local rescaling or observation noise.")
+                    normalization_note=("One fixed affine transform from the supplied mean/std is used for every ground-truth trajectory and its paired model. No future drift observations are used to fit it."
+                                        if requested["simulation"]["normalization"] == "fixed" else
+                                        "trajectory uses one affine transform per full recorded truth trajectory, including its future; the same transform is used for its paired model. No time-local rescaling or observation noise."))
     save_npz(path, arrays, metadata)
     return arrays, metadata
 
@@ -421,7 +472,9 @@ def main(argv=None):
     if args.dry_run:
         print(json.dumps(dict(simulation=spec, n_trajectories=args.n_trajectories,
                               model_runs=[str(p) for p in args.model_runs], output_dir=str(args.output_dir),
-                              ground_truth=str(args.ground_truth), device=args.device, gpu_id=args.gpu_id), indent=2))
+                              ground_truth=str(args.ground_truth), device=args.device, gpu_id=args.gpu_id,
+                              training_data_dir=str(args.training_data_dir) if args.training_data_dir else None,
+                              normalization_stats=str(args.normalization_stats) if args.normalization_stats else None), indent=2))
         return 0
     torch.set_num_threads(args.cpu_threads)
     device = "cpu"
@@ -436,6 +489,7 @@ def main(argv=None):
                     raise FileNotFoundError(f"Missing model file: {run / filename}")
     print(f"{regime.name}: {args.n_trajectories} paired trajectories; {args.burn_in_steps} fixed burn-in steps, then {args.steps} states; raw {spec['parameter_start']} -> {spec['parameter_end']}", flush=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    prepare_training_scaling(args, regime)
     arrays, truth_metadata = ground_truth(args, module, regime, regime_path)
     if args.ground_truth_only:
         print(f"Ground-truth cache: {args.ground_truth}", flush=True)

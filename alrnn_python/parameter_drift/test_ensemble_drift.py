@@ -52,6 +52,87 @@ class EnsembleDriftTests(unittest.TestCase):
         return dict(A=torch.ones(5), W=torch.zeros(5, 5), h=torch.zeros(5),
                     B=torch.zeros(3, 5), C=torch.tensor([[1.], [2.], [3.], [0.], [0.]]))
 
+    def training_fixture(self):
+        folder = self.root / "training"
+        folder.mkdir()
+        metadata = dict(config=dict(regime=self.regime.name, standardization="global"),
+                        phi_reference=dict(boundary=1., scale=.5))
+        (folder / "metadata.json").write_text(json.dumps(metadata))
+        np.save(folder / "trajectory_mean.npy", np.tile([1., 2., 3.], (2, 1, 1)))
+        np.save(folder / "trajectory_std.npy", np.tile([2., 3., 4.], (2, 1, 1)))
+        return folder
+
+    def test_global_training_scaling_is_used_for_all_ensemble_members(self):
+        folder = self.training_fixture()
+        args = self.args("--normalization", "fixed", "--training-data-dir", str(folder))
+        self.assertEqual(args.normalization_stats, args.output_dir / "training_scaling.npz")
+        with contextlib.redirect_stdout(io.StringIO()):
+            ensemble.prepare_training_scaling(args, self.regime)
+        spec = ensemble.simulation_spec(args, self.regime)
+        arrays, _ = ensemble.simulate_ensemble(self.module, self.regime, spec, 3,
+                                              scaling_path=args.normalization_stats, progress=False)
+        np.testing.assert_array_equal(arrays["mean"], np.tile([1., 2., 3.], (3, 1)))
+        np.testing.assert_array_equal(arrays["std"], np.tile([2., 3., 4.], (3, 1)))
+        np.testing.assert_allclose(ensemble.physical_prediction(arrays["x"], arrays), arrays["observed"], atol=1e-6)
+        self.assertEqual(args.training_scaling_source["training_data_dir"], str(folder))
+
+    def test_training_snapshot_reuse_and_replot_do_not_require_original_data(self):
+        folder = self.training_fixture()
+        args = self.args("--normalization", "fixed", "--training-data-dir", str(folder))
+        with contextlib.redirect_stdout(io.StringIO()):
+            ensemble.prepare_training_scaling(args, self.regime)
+            digest = ensemble.single.file_hash(args.normalization_stats)
+            ensemble.prepare_training_scaling(args, self.regime)
+            self.assertEqual(ensemble.single.file_hash(args.normalization_stats), digest)
+            (folder / "metadata.json").unlink()
+            args.plot_only = True
+            ensemble.prepare_training_scaling(args, self.regime)
+        self.assertEqual(ensemble.single.file_hash(args.normalization_stats), digest)
+
+    def test_training_snapshot_rejects_changed_scaling_unless_regenerated(self):
+        folder = self.training_fixture()
+        args = self.args("--normalization", "fixed", "--training-data-dir", str(folder))
+        with contextlib.redirect_stdout(io.StringIO()):
+            ensemble.prepare_training_scaling(args, self.regime)
+        np.save(folder / "trajectory_std.npy", np.tile([4., 5., 6.], (2, 1, 1)))
+        with self.assertRaisesRegex(ValueError, "scaling differs"):
+            ensemble.prepare_training_scaling(args, self.regime)
+        args.regenerate_ground_truth = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            ensemble.prepare_training_scaling(args, self.regime)
+        _, std = ensemble.single.load_scaling(args.normalization_stats)
+        np.testing.assert_array_equal(std, [4., 5., 6.])
+
+    def test_training_regime_and_phi_reference_must_match_the_drift(self):
+        folder = self.training_fixture()
+        args = self.args("--normalization", "fixed", "--training-data-dir", str(folder))
+        path = folder / "metadata.json"
+        metadata = json.loads(path.read_text())
+        metadata["phi_reference"]["scale"] = 5.
+        path.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(ValueError, "phi reference"):
+            ensemble.prepare_training_scaling(args, self.regime)
+        metadata["config"]["regime"] = "another_system"
+        path.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(ValueError, "Expected training regime"):
+            ensemble.prepare_training_scaling(args, self.regime)
+
+    def test_dadras_preset_uses_decreasing_raw_e_and_original_phi_reference(self):
+        config = Path(ensemble.__file__).with_name("dadras_ensemble_config.json")
+        args = ensemble.parse_args(["--config", str(config)])
+        module, _ = ensemble.single.load_regime_module()
+        regime = ensemble.single.resolve_regime(module, args.regime)
+        spec = ensemble.simulation_spec(args, regime)
+        times = np.arange(args.steps) * args.dt
+        parameter = ensemble.single.parameter_at_time(times, spec)
+        np.testing.assert_allclose(parameter[[0, -1]], [6.2, 5.2])
+        self.assertTrue(np.all(np.diff(parameter) < 0))
+        self.assertEqual((args.n_trajectories, args.steps, args.burn_in_steps), (200, 4000, 5000))
+        self.assertEqual(spec["phi_boundary"], regime.boundary)
+        self.assertEqual(args.normalization, "fixed")
+        self.assertEqual(args.model_runs[0].parent.name, "cphi")
+        self.assertEqual(args.model_runs[0].parent.parent.name, "20261102_001412_188043_1162805")
+
     def test_config_paths_are_portable_and_cli_phi_replaces_raw_preset(self):
         args = self.args()
         self.assertEqual(args.output_dir, self.root / "results")

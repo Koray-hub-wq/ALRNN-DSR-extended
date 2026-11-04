@@ -135,6 +135,43 @@ renormalize its endpoints to [-1, 1].
 
 ## Configure, reuse and replot
 
+### Dadras with linear decreasing e
+
+From the repository root, run:
+
+```bash
+bash alrnn_python/parameter_drift/run_dadras_ensemble_drift.sh 0
+```
+
+`dadras_ensemble_config.json` uses the same 200 paired trajectories, 5000 burn-in
+steps, 4000 stored states, dt=0.01 and plots as the Halvorsen preset. Burn-in holds
+e=6.2 fixed; the subsequent linear drift decreases e from 6.2 to 5.2. The checkpoint is:
+
+```text
+alrnn_python/runs/term_ablations/dadras/combined_dadras_balanced/20261102_001412_188043_1162805/cphi/dadras_e_5p9_to_6p2
+```
+
+This model was trained with **global** mixed-data standardization. The Dadras
+preset therefore reads its fixed mean/std and phi reference from:
+
+```text
+/export/home/klenkeit/training_data/mixed_parameter_trajectories/dadras/combined_dadras/dadras_e_5p9_to_6p2
+```
+
+The required calibration files are `metadata.json`, `trajectory_mean.npy` and
+`trajectory_std.npy`; the large training arrays are not loaded. Override a moved
+dataset with `TRAINING_DATA_DIR=/path/to/dataset` or `--training-data-dir` after
+the GPU ID. The regime, global scaling and phi reference are checked. The drift
+keeps the regime's original phi reference; its restricted raw interval is not
+rescaled. It includes extrapolation below the model's training range [5.9, 6.2].
+
+Results go to `parameter_drift/results/dadras_ensemble_linear_decreasing_4000/`.
+`training_scaling.npz` archives the fixed coordinates and their source hashes;
+neither the model nor the training dataset is modified. A cached `--plot-only`
+run can use this snapshot without access to the original training data. All
+other cache rules and Python options below apply to both launchers. Changes to
+the training calibration require a new output directory or explicit regeneration.
+
 Edit the JSON or pass Python options after the GPU ID. Paths in JSON resolve
 relative to the JSON's directory; paths passed on the command line resolve
 relative to the shell's working directory. For example:
