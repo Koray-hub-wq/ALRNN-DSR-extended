@@ -139,3 +139,165 @@ require changing the shared data/trainer contract, so this isolated experiment
 keeps 1%. Increasing the training fraction also changes the data used to fit
 normalization, so this recipe is a new experiment, not an exact single-factor
 comparison with the previous noisy dataset.
+
+## How balanced sampling works within and across batches
+
+The defaults below apply separately to each of the four trained models. Each
+batch contains 80 windows of 200 steps drawn from the 495-sample training
+prefixes. Inputs use indices `start..start+199`; their one-step-shifted targets
+use `start+1..start+200`. Valid starts are therefore 0..294, inclusive. Test
+samples never enter these windows.
+
+1. First draw 80 trajectory indices with replacement, weighted by their training
+   lengths. All 304 trajectories have the same training length here. The expected
+   batch composition is `80*256/304 = 67.37` constant windows and `80*48/304 =
+   12.63` dynamic windows. These counts fluctuate; there is no fixed per-mode
+   quota. Each dynamic mode contributes about 4.21 windows per batch on average.
+2. Keep the number and positions of the constant slots, but redistribute those
+   slots over the 128 distinct constant rho values. Each value gets the same
+   integer number of slots; any remainder is assigned to a random subset of
+   values. Since even a fully constant batch has at most 80 slots, this recipe
+   selects distinct constant values within a batch. For example, 67 constant
+   slots mean 67 randomly selected values with one window each. Across batches,
+   all values have equal expected frequency, but there is no shuffled global
+   cycle that guarantees all 128 values before a value can recur.
+3. Within each selected constant value, choose between its two trajectories
+   with equal probability, because they have equal training lengths. The exact
+   initial states are paired 50/50 in the dataset and have equal expected sampling
+   weight. Neither batches nor epochs enforce an exact 50/50 initial-state count.
+   Dynamic trajectory choices from step 1 are left unchanged.
+4. For a constant trajectory, choose a valid start uniformly at random. For a
+   dynamic trajectory, split the 295 valid starts into ten contiguous sections
+   of 29 or 30 starts. Each trajectory maintains its own randomly shuffled
+   ordering of those ten sections. Each time it is selected, take the next
+   section and choose a start uniformly within it. After all ten sections have
+   been used, reshuffle and begin the next cycle.
+
+The dynamic section counters persist across batches and epochs; they are not
+reset at an epoch boundary. Within every completed ten-selection cycle of one
+dynamic trajectory, each section is used exactly once. This balances window
+start times, not individual sample coverage or parameter values. A sinusoid
+spends more time near its bounds, and linear sweeps with different spans have
+different speeds, so temporal balance does not guarantee a uniform rho histogram.
+Overlapping windows also mean that some states appear in more windows than
+others. In particular, the first point is not explicitly oversampled. Transients
+receive more emphasis through the short trajectory length itself.
+
+One optimizer update uses the mean squared error of all 80 windows, followed by
+one backward pass and one optimizer step. The observed coordinates are injected
+every 16 rollout steps using the existing teacher-forcing scheme. There are 100
+updates per epoch and 1000 epochs by default. Here an epoch is a bookkeeping unit
+of 100 newly sampled batches, not a complete traversal of the dataset. The
+learning-rate scheduler steps after every epoch; optimizer state, model state
+and dynamic sampling cycles continue across epoch boundaries.
+
+## How the bifurcation analysis differs from earlier extended runs
+
+Bifurcation analysis generates new constant-parameter simulations; it does not
+reuse training windows or concatenate the dynamic training schedules. The new
+Lorenz analysis evaluates 290 rho values in [1,30]. The comparison below describes
+the existing standard mixed-run launcher/backend defaults; command-line overrides
+can change the older settings.
+
+| Property | Earlier standard extended comparison | This Lorenz experiment |
+| --- | --- | --- |
+| Physical initial states | One draw per parameter from the regime's Gaussian initial distribution | Both exact states (1,1,1) and (-1,-1,1) at every parameter |
+| True-system burn-in | 5000 steps, then 500 context steps by default | Integrate from t=0; retain t=200..250 |
+| ALRNN initialization | Seed from the last ground-truth context state, already after the true-system burn-in | Seed at t=0 from each exact physical initial state |
+| Model settling before extracting points | No separate long model warm-up; extract maxima over the forecast | Model independently evolves to t=200 before extracting points |
+| Extraction window | 15000 model steps; true window defaults to the same length | 50 time units, or 5000 steps at dt=0.01, including the starting observation at t=200 |
+| Values plotted | Strict local maxima of the selected component; the standard launcher defaults to z, with x selectable | Local minima and maxima of x, or one stationary x per converged initial state |
+| Stable branches | A constant series has no strict local maximum and can disappear | Explicit stationary-observation detection retains its x value |
+
+Both true dynamics and the ALRNN therefore have their own full evolution from
+the specified initial state in the new test. The model receives no ground-truth
+state after initialization, and there is no teacher forcing during analysis.
+This checks whether it reaches the appropriate long-term behavior from both
+sides, rather than receiving an already settled true-system state as its start.
+Each parameter is simulated independently, without continuation from the previous
+parameter's terminal state.
+
+Stationarity requires all three standardized observations to have sufficiently
+small ranges over the whole observation window, and a small final rate. Defaults
+are `stationary_atol=1e-5`, `stationary_rtol=1e-5`, and `stationary_rate=1e-3` per
+time unit. If stationary, plot the mean x of that tail; otherwise extract x
+minima/maxima. No extrema without stationarity does not automatically become a
+fixed-point marker. This detects stationary observations, not a mathematical
+proof of a stationary latent state. Non-finite model rollouts are excluded from
+the bifurcation points and recorded in diagnostics.
+
+Normalization remains fixed to training statistics, with every model converted
+to the [5,23] dataset's reference coordinates for comparison. Ground truth and
+each trained model are shown in separate vertically arranged panels.
+
+## How the trajectory test plots are generated
+
+`plot_trajectories.py` creates the files under
+`results/<run>/analysis/trajectories/<variant>/<dataset>/` after training and
+the variant's bifurcation comparison. These are independent diagnostic
+simulations, not plots of the withheld five-sample tails. They reuse the physical
+initial states used in training, and mainly probe familiar parameter ranges;
+they should not be interpreted as a wholly unseen held-out dataset.
+
+With the launcher's defaults, each trained model is evaluated at constant
+`rho = 5,14,23,28`, from both exact physical initial states. This gives eight
+model trajectories per checkpoint and 32 over all four checkpoints. Rho=28 is
+outside the [5,23] model's training range, but inside the [1,30] model's range.
+There is no parameter drift in these diagnostic trajectories.
+
+The simulations proceed as follows:
+
+1. Simulate the true Lorenz equations with sigma=10 and beta=8/3 using SciPy's
+   DOP853 solver (`rtol=1e-7`, `atol=1e-9`, maximum internal step `5*dt`). Sample
+   from t=0 to t=50 at the training interval dt=0.01: 5001 states including t=0.
+   There is no initial perturbation, observation noise or burn-in.
+2. Load the trained checkpoint. Normalize the exact physical initial state using
+   that model's own training mean/std. Initialize its latent state as `x0 @ B`,
+   then overwrite the first three latent coordinates with the normalized observed
+   x0, matching the existing ALRNN initialization convention. Remaining latent
+   coordinates retain their values from `x0 @ B`.
+3. Supply the fixed normalized parameter `phi = (rho-boundary)/scale` on every
+   model step (Lorenz defaults: boundary=24.74, scale=23.74). Free-run the model
+   for 5000 steps. No observed states are injected after t=0: no teacher forcing,
+   reinitialization, alignment to truth or parameter updates. The t=0 state is
+   included in the saved result. Although the reused rollout helper receives a
+   retention start of one step, that first model step is retained and the exact
+   t=0 state is prepended; no physical warm-up is discarded here.
+4. Convert the model output back through its own physical coordinates, then
+   normalize both truth and model using the [5,23] dataset's fixed statistics.
+   This gives a common coordinate system across models and matches the
+   bifurcation analysis. There is no per-test-trajectory rescaling.
+
+For every rho, two PNGs are saved:
+
+- `rho_<value>_time_series.png`: three rows for x,y,z and four columns. Left to
+  right: positive IC at t=0..5, positive IC at t=40..50, negative IC at t=0..5,
+  negative IC at t=40..50. Each panel overlays the ground-truth and ALRNN curves.
+  The late panels are slices of the same uninterrupted t=0..50 simulation, not
+  new rollouts initialized at t=40. Thus they also reflect accumulated error.
+- `rho_<value>_3d.png`: two rows for the two ICs and two columns for ground truth
+  and model. It uses the entire t=0..50 trajectory, with a shared time colorbar
+  and shared coordinate limits between truth/model within each row.
+
+There are eight PNGs per checkpoint and 32 trajectory PNGs for the complete
+default experiment. Different freely evolving chaotic trajectories can separate
+pointwise even when their long-term geometry is similar; the late time traces
+are therefore complementary to the bifurcation and 3D comparisons.
+
+`orbits.npz` in each dataset folder stores time, rho, initial-state index,
+standardized ground-truth and model arrays, and the first non-finite model step
+(-1 means none). The default truth/model array shapes are `(8,5001,3)`; rows are
+ordered by rho, with the positive IC then the negative IC for each rho.
+Non-finite model trajectories retain their finite prefixes for plotting and have
+NaN suffixes. `trajectory_sources.json`, one per variant folder, records all
+plots, actual parameters/duration, coordinates, checkpoint/code hashes and failure
+indices. The rollout files and this JSON allow inspection without retraining;
+these trajectory plots do not compute an additional quantitative test loss or
+affect the saved checkpoint.
+
+The default duration can be changed with `run_training.py --orbit-duration`;
+standalone `plot_trajectories.py` also accepts `--duration` and `--parameters`.
+Early panels show t=0..min(5,duration), and late panels show the last ten time
+units (or the full interval if shorter). For a particular server run, consult
+its `plan.json`, analysis logs and `analysis/trajectories/<variant>/trajectory_sources.json`
+for the actual settings rather than assuming the defaults above.
