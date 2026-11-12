@@ -1,19 +1,28 @@
-"""Exact half/half minibatches, balancing parameter values within each population."""
+"""Fixed population proportions, balancing parameter values within each group.
+
+The class name is retained for existing 50/50 launchers; attractor_fraction
+also supports exact 70/30 batches without changing their legacy default.
+"""
 import numpy as np
 
 from mixed_trajectory_dataset import MixedTrajectoryDataset
 
 
 class HalfHalfDataset(MixedTrajectoryDataset):
-    def __init__(self, *args, population_labels, tail_evaluations=4, **kwargs):
+    def __init__(self, *args, population_labels, tail_evaluations=4, attractor_fraction=.5, **kwargs):
         super().__init__(*args, **kwargs)
         self.population_labels = np.asarray(population_labels, dtype=str)
         if self.population_labels.shape != (self.num_trajectories,) or set(self.population_labels) != {"attractor", "transient"}:
             raise ValueError("Every trajectory needs an attractor/transient label; both populations must exist.")
         if not self.balanced_sampling or not self.constant_mask.all():
             raise ValueError("Half/half sampling requires --mixed-balanced-sampling and constant parameters.")
-        if self.batch_size % 2:
-            raise ValueError("Exact half/half sampling requires an even batch size.")
+        if isinstance(attractor_fraction, (bool, np.bool_)) or not np.isfinite(attractor_fraction) or not 0 < attractor_fraction < 1:
+            raise ValueError("attractor_fraction must lie strictly between zero and one.")
+        count = self.batch_size*attractor_fraction
+        if not np.isclose(count, round(count), atol=1e-8, rtol=0.) or not 0 < round(count) < self.batch_size:
+            raise ValueError("Choose a batch size giving integer counts in both groups; half/half needs an even batch size.")
+        self.population_batch_sizes = dict(attractor=int(round(count)), transient=self.batch_size-int(round(count)))
+        self.attractor_fraction = float(attractor_fraction)
         if self.population_labels[0] != "attractor":
             raise ValueError("Put an attractor trajectory first for the existing monitoring reference.")
         self.population_pools = {}
@@ -23,10 +32,10 @@ class HalfHalfDataset(MixedTrajectoryDataset):
             pools = [pool for pool in pools if len(pool)]
             self.population_pools[label] = pools
             for pool in pools:
-                probabilities[pool] = .5 / len(pools) / len(pool)
+                probabilities[pool] = self.population_batch_sizes[label] / self.batch_size / len(pools) / len(pool)
         self.trajectory_probabilities = probabilities
         self.base_trajectory_probabilities = probabilities.copy()
-        self.sampling_strategy = "exact_half_attractor_half_transient_balanced_parameters_within_population"
+        self.sampling_strategy = "fixed_population_proportions_balanced_parameters_within_population"
         if type(tail_evaluations) is not int or not 0 <= tail_evaluations <= 4:
             raise ValueError("tail_evaluations must be between zero and four.")
         self.tail_evaluations = tail_evaluations
@@ -42,8 +51,8 @@ class HalfHalfDataset(MixedTrajectoryDataset):
 
     def _sample_trajectory_indices(self):
         selected = []
-        for pools in self.population_pools.values():
-            count, remainder = divmod(self.batch_size//2, len(pools))
+        for label, pools in self.population_pools.items():
+            count, remainder = divmod(self.population_batch_sizes[label], len(pools))
             sizes = np.full(len(pools), count, dtype=np.int64)
             sizes[np.random.permutation(len(pools))[:remainder]] += 1
             for pool, size in zip(pools, sizes):
@@ -54,10 +63,11 @@ class HalfHalfDataset(MixedTrajectoryDataset):
 
     def sampling_metadata(self):
         metadata = super().sampling_metadata()
-        metadata.update(trajectory_weighting="fixed_half_per_population_then_uniform_parameter_then_uniform_trajectory",
+        metadata.update(trajectory_weighting="fixed_population_proportions_then_uniform_parameter_then_uniform_trajectory",
                         constant_balance="equal_counts_per_batch_with_random_remainder_within_each_population",
                         population_labels=self.population_labels.tolist(),
-                        population_windows_per_batch={label: self.batch_size//2 for label in self.population_pools},
+                        population_windows_per_batch=dict(self.population_batch_sizes),
+                        attractor_fraction=self.attractor_fraction,
                         parameter_values_per_population={label: len(pools) for label, pools in self.population_pools.items()},
                         population_sampled_windows={label: int(self.sampled_trajectory_counts[self.population_labels == label].sum())
                                                    for label in self.population_pools},

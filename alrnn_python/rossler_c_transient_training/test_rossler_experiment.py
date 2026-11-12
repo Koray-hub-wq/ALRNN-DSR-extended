@@ -76,6 +76,25 @@ class RosslerExperimentTest(unittest.TestCase):
         self.assertEqual(metadata["population_sampled_windows"], {"attractor": 12, "transient": 12})
         self.assertEqual(metadata["parameter_values_per_population"], {"attractor": 3, "transient": 5})
 
+    def test_seventy_thirty_batches_probabilities_and_actual_window_counts(self):
+        sampler = self.sampler(attractor_fraction=.7)
+        for _ in range(20):
+            indices = sampler._sample_trajectory_indices()
+            self.assertEqual(np.count_nonzero(sampler.population_labels[indices] == "attractor"), 56)
+            self.assertEqual(np.count_nonzero(sampler.population_labels[indices] == "transient"), 24)
+            for label, pools in sampler.population_pools.items():
+                counts = [np.isin(indices, pool).sum() for pool in pools]
+                self.assertLessEqual(max(counts)-min(counts), 1)
+        np.testing.assert_allclose(sampler.trajectory_probabilities[:3], .7/3)
+        np.testing.assert_allclose(sampler.trajectory_probabilities[3:], .3/10)
+        for _ in range(4):
+            sampler.sample_batch()
+        metadata = sampler.sampling_metadata()
+        self.assertEqual(metadata["population_windows_per_batch"], {"attractor": 56, "transient": 24})
+        self.assertEqual(metadata["population_sampled_windows"], {"attractor": 224, "transient": 96})
+        with self.assertRaisesRegex(ValueError, "integer"):
+            self.sampler(batch_size=8, attractor_fraction=.7)
+
     def test_reject_odd_batches_and_keep_at_most_four_long_tail_groups(self):
         with self.assertRaisesRegex(ValueError, "even"):
             self.sampler(batch_size=7)
@@ -116,6 +135,9 @@ class RosslerExperimentTest(unittest.TestCase):
         self.assertEqual(comparison.command[comparison.command.index("--parameter-min")+1], "3.0")
         self.assertEqual(comparison.command[comparison.command.index("--parameter-max")+1], "6.0")
         self.assertEqual(args.orbit_parameters, [3., 4., 4.5, 5., 5.5, 6.])
+        args = runner.parse_args(["--dry-run", "--attractor-fraction", ".7"])
+        step = runner.make_steps(args, "train__rossler_c_3_to_6", 0, .01)[0]
+        self.assertEqual(step.command[step.command.index("--attractor-fraction")+1], "0.7")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,24 @@ analyses. Both datasets train additive Cphi models with 300 latent dimensions /
 
 ## Input datasets
 
+The new wide-initial-condition profile uses 30 attractor trajectories of 50,000
+steps at 10 c values and 500 transient trajectories of 500 steps, with 5%
+observation noise. Its data-generation config and instructions are in
+[the simulation folder](../../../generate_trainingdata/mixed_parameter_trajectories/README_rossler_c_transients_70_30_wide_ic.md).
+Start that profile with:
+
+```bash
+bash alrnn_python/rossler_c_transient_training/run_rossler_c_transients_70_30_cphi.sh 2
+```
+
+It defaults to the `rossler_c_transients_70_30_wide_ic` data folder and 70/30
+sampling, exactly 56 attractor / 24 transient windows per batch of 80. Parameter
+balancing is performed separately inside each population. `--attractor-fraction`
+or shell `ATTRACTOR_FRACTION` selects the proportion; batch size must permit
+integer counts in both populations. The actual counts and proportions are saved
+in plan.json and metrics.json. The following sections describe the original
+50/50 profile and its defaults; its existing launcher keeps those defaults.
+
 Data-generation code, JSON configuration and simulation tests live outside this
 repository in `generate_trainingdata/mixed_parameter_trajectories`, as for the
 existing experiments. See the local

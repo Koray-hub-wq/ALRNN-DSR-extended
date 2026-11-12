@@ -1,4 +1,4 @@
-"""Train two Cphi checkpoints with exact 50/50 windows, then full-range analyses."""
+"""Train Cphi with fixed population window proportions, then full-range analyses."""
 from __future__ import annotations
 
 import argparse
@@ -40,6 +40,7 @@ def parse_args(argv=None):
     parser.add_argument("--cpu-threads", type=int, default=4)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--tail-evaluations", type=int, choices=range(5), default=4)
+    parser.add_argument("--attractor-fraction", type=float, default=.5)
     parser.add_argument("--num-parameters", type=int, default=320)
     parser.add_argument("--bifurcation-burn-in-steps", type=int, default=5000)
     parser.add_argument("--bifurcation-context-steps", type=int, default=500)
@@ -50,8 +51,11 @@ def parse_args(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     validate_gpu_ids(args.gpu_ids, max_gpus=6)
-    if args.batch_size < 2 or args.batch_size % 2:
-        parser.error("batch-size must be positive and even for exact half/half batches.")
+    if not math.isfinite(args.attractor_fraction) or not 0 < args.attractor_fraction < 1:
+        parser.error("attractor-fraction must lie strictly between zero and one.")
+    attractor_count = args.batch_size*args.attractor_fraction
+    if args.batch_size < 2 or not math.isclose(attractor_count, round(attractor_count), abs_tol=1e-8, rel_tol=0.) or not 0 < round(attractor_count) < args.batch_size:
+        parser.error("batch-size must give integer nonzero counts for both populations (half/half requires even batches).")
     for key in ("epochs", "batches_per_epoch", "sequence_length", "cpu_threads", "bifurcation_context_steps"):
         if getattr(args, key) < 1:
             parser.error(f"{key} must be positive.")
@@ -80,6 +84,7 @@ def make_steps(args, job, gpu, dt):
         step = training_step(args, ALRNN_DIR, models, "cphi", variant, dataset, gpu)
         step.command[2] = str(HERE / "train_cphi.py")
         step.command.extend(["--tail-evaluations", str(args.tail_evaluations)])
+        step.command.extend(["--attractor-fraction", str(args.attractor_fraction)])
         if args.device == "cpu":
             step.command.append("--force-cpu")
         return [step]
@@ -107,7 +112,7 @@ def preflight(args):
     for name in DATASETS:
         folder = args.training_data_root / name
         metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8-sig"))
-        if metadata.get("experiment") != "rossler_c_transients_50_50_v1":
+        if metadata.get("experiment") not in ("rossler_c_transients_50_50_v1", "rossler_c_transient_populations_v1"):
             raise ValueError(f"Expected the new population-labeled experiment data: {folder}")
         labels = np.load(folder / "trajectory_population.npy", allow_pickle=False)
         lengths = np.load(folder / "trajectory_lengths.npy", allow_pickle=False)
@@ -156,7 +161,9 @@ def main(argv=None):
     gpu_file.write_text(json.dumps(args.gpu_ids)+"\n", encoding="utf-8")
     if not args.analysis_only:
         (args.run_root / "plan.json").write_text(json.dumps(dict(args=vars(args), training_jobs=trainings,
-            analysis_jobs=analyses, bifurcation_dt=dt, sampler="exact half/half per batch"), indent=2, default=str)+"\n", encoding="utf-8")
+            analysis_jobs=analyses, bifurcation_dt=dt, sampler="fixed population proportions per batch",
+            population_windows_per_batch=dict(attractor=round(args.batch_size*args.attractor_fraction),
+                transient=args.batch_size-round(args.batch_size*args.attractor_fraction))), indent=2, default=str)+"\n", encoding="utf-8")
     print(f"Models and analyses: {args.run_root}\nProgress: tail -f {shlex.quote(str(log_dir))}/*.log\nGPU queue: {gpu_file}", flush=True)
     env = os.environ.copy()
     env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1", MPLBACKEND="Agg")

@@ -15,6 +15,7 @@ if [[ -n "${EPOCHS:-}" ]]; then extra_args+=(--epochs "$EPOCHS"); fi
 if [[ -n "${CPU_THREADS:-}" ]]; then extra_args+=(--cpu-threads "$CPU_THREADS"); fi
 if [[ -n "${NUM_PARAMETERS:-}" ]]; then extra_args+=(--num-parameters "$NUM_PARAMETERS"); fi
 if [[ -n "${TAIL_EVALUATIONS:-}" ]]; then extra_args+=(--tail-evaluations "$TAIL_EVALUATIONS"); fi
+if [[ -n "${ATTRACTOR_FRACTION:-}" ]]; then extra_args+=(--attractor-fraction "$ATTRACTOR_FRACTION"); fi
 case "${ANALYSIS_ONLY:-0}" in
   0) ;;
   1) extra_args+=(--analysis-only) ;;
