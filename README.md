@@ -82,6 +82,12 @@ The extended Python training script supports independently selectable additive
 [Optional Parameter Terms](alrnn_python/EXTERNAL_TERMS.md) for training flags,
 checkpoint compatibility, evaluation and the term registry.
 
+The [two-parameter Halvorsen experiment](alrnn_python/halvorsen_ab/README.md)
+trains on a 5-by-5 Cartesian grid over `(a,b) in [1.4,2.1] x [2,4]`, with long
+post-burn-in trajectories and two independent phi channels. It includes an
+offline interactive Plotly bifurcation report with fixed-a/fixed-b slices and
+free 3D trajectory comparisons against ground truth.
+
 ## Model and Training routine
 The model including its training algorithm is implemented in the &rarr; [`ALRNN_Tutorial`](alrnn_python/AL-RNN_tutorial.ipynb) notebook. The AL-RNN using Identity mapping to generate observations is defined within the model class `AL_RNN`. The latent dimension $M$ and number of PWL units $P$ need to be specified. Training is performed through the `training_sh` routine using backpropagation through time with a sparse teacher forcing protocol, forcing the latent states based on the observations in order to prevent exploding/vanishing gradients.
 

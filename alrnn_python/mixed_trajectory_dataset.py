@@ -93,18 +93,17 @@ class MixedTrajectoryDataset:
         if parameters is None:
             raise ValueError("Balanced mixed sampling requires phi arrays, also for models without phi inputs")
         validate_trajectory_array(parameters, self.lengths, self.offsets)
-        if parameters.shape[-1] != 1:
-            raise ValueError("Balanced mixed sampling requires one scalar parameter per time step")
+        phi_dim = parameters.shape[-1]
         modes = None if trajectory_modes is None else np.asarray(trajectory_modes, dtype=str)
         if modes is not None and modes.shape != (self.num_trajectories,):
             raise ValueError("trajectory_modes must contain one mode per trajectory")
-        first_values = np.empty(self.num_trajectories, dtype=np.float64)
+        first_values = np.empty((self.num_trajectories, phi_dim), dtype=np.float64)
         for index, train_length in enumerate(self.train_lengths):
-            values = trajectory_view(parameters, index, self.lengths, self.offsets)[:int(train_length), 0]
+            values = trajectory_view(parameters, index, self.lengths, self.offsets)[:int(train_length)]
             if not np.isfinite(values).all():
                 raise ValueError(f"Non-finite sampling parameters in training trajectory {index}")
             first_values[index] = values[0]
-            constant = bool(np.isclose(values.min(), values.max(), atol=1e-6, rtol=0.0))
+            constant = bool(np.all(np.isclose(values.min(axis=0), values.max(axis=0), atol=1e-6, rtol=0.0)))
             if modes is not None:
                 if modes[index] == "constant" and not constant:
                     raise ValueError(f"Trajectory {index} is labelled constant but its training parameter varies")
@@ -113,14 +112,23 @@ class MixedTrajectoryDataset:
         # Merge equal parameter values across repeated constant blocks. The
         # tolerance only collapses float32 rounding differences, not time bins.
         ordered = np.flatnonzero(self.constant_mask)
-        ordered = ordered[np.argsort(first_values[ordered], kind="stable")]
+        ordered = ordered[np.lexsort(first_values[ordered].T[::-1])]
         values, pools = [], []
         for index in ordered:
-            if not values or not np.isclose(first_values[index], values[-1], atol=1e-6, rtol=0.0):
-                values.append(float(first_values[index]))
+            # Near-equal vectors need not be adjacent in lexicographic order:
+            # (0,0), (0,1), (epsilon,0) must put the first and last in one pool.
+            candidates = (range(max(0, len(values) - 1), len(values)) if phi_dim == 1 else range(len(values)))
+            position = next((i for i in candidates
+                             if np.allclose(first_values[index], values[i], atol=1e-6, rtol=0.0)), None)
+            if position is None:
+                values.append(first_values[index].copy())
                 pools.append([])
-            pools[-1].append(int(index))
-        self.constant_phi_values = np.asarray(values)
+                position = len(pools) - 1
+            pools[position].append(int(index))
+        self.constant_phi_values = np.asarray(values, dtype=np.float64).reshape(-1, phi_dim)
+        # Preserve the existing scalar metadata/API for one-parameter datasets.
+        if phi_dim == 1:
+            self.constant_phi_values = self.constant_phi_values[:, 0]
         self.constant_parameter_pools = [np.asarray(pool, dtype=np.int64) for pool in pools]
         constant_mass = self.base_trajectory_probabilities[self.constant_mask].sum()
         for pool in self.constant_parameter_pools:
