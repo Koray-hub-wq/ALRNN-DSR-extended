@@ -103,6 +103,25 @@ Alternativ mit Bash:
 bash alrnn_python/halvorsen_ab/run_halvorsen_ab.sh 0
 ```
 
+Für den vollständigen Server-Ablauf einschließlich Aktivierung der bisherigen
+CUDA-Umgebung, Paketinstallation, Simulator-Update, Datengenerierung, Training
+und Auswertung gibt es einen eigenen Launcher:
+
+```bash
+bash alrnn_python/halvorsen_ab/run_halvorsen_ab_server.sh 0 4
+```
+
+Das erste Argument ist die GPU-ID (Standard 0), das zweite die Zahl der
+CPU-Threads (Standard 4). Die Limits für numerische Bibliotheken und Build-Jobs
+gelten bereits vor dem ersten Python-Aufruf. Ist `taskset` vorhanden, werden alle
+Python-Schritte und ihre Kindprozesse außerdem auf höchstens diese Zahl bereits
+zugelassener CPUs beschränkt. Vorhandene Slurm-/Container-CPU-Masken bleiben dabei
+berücksichtigt. Das Skript bricht bei einem fehlgeschlagenen Schritt ab.
+
+Standardpfade sind `$HOME/DynaMix-python-b-tipping/venv` und
+`$HOME/diffrentbutconst_prams`. Andere Orte lassen sich mit `VENV_DIR` und
+`SIMULATOR_ROOT` setzen. Der Launcher wechselt selbst in das ALRNN-Repository.
+
 Die Schritte lassen sich einzeln ausführen:
 
 ```bash
